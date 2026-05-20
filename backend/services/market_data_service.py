@@ -1,6 +1,6 @@
 """
 Market data service backed by yfinance (free, ~15-min delayed during market hours).
-Replaces the Polygon.io dependency which was removed from requirements.txt.
+Schwab real-time data will replace yfinance once API access is approved.
 """
 
 from datetime import date, timedelta
@@ -18,8 +18,8 @@ def _pct_change(prev: float, last: float) -> float:
 def get_previous_day_movers(tickers: list[str], limit: int = 20) -> list[dict]:
     """Previous-day % movers for a given ticker list.
 
-    Downloads 5 days of daily bars via yfinance and computes the most recent
-    day-over-day change. Sorted by absolute % change, descending.
+    Downloads 7 calendar days (guarantees ≥2 trading days across long holiday weekends)
+    and computes the most recent day-over-day change. Sorted by absolute % change.
     """
     if not tickers:
         return []
@@ -34,7 +34,7 @@ def get_previous_day_movers(tickers: list[str], limit: int = 20) -> list[dict]:
         interval="1d",
         progress=False,
         auto_adjust=True,
-        group_by="ticker" if len(tickers) > 1 else "column",
+        group_by="ticker",
     )
 
     if data.empty:
@@ -43,26 +43,14 @@ def get_previous_day_movers(tickers: list[str], limit: int = 20) -> list[dict]:
     results = []
     for ticker in tickers:
         try:
-            if len(tickers) == 1:
-                closes = data["Close"]
-                opens = data["Open"]
-                highs = data["High"]
-                lows = data["Low"]
-                volumes = data["Volume"]
-            else:
-                closes = data["Close"][ticker]
-                opens = data["Open"][ticker]
-                highs = data["High"][ticker]
-                lows = data["Low"][ticker]
-                volumes = data["Volume"][ticker]
-
-            closes = closes.dropna()
+            t = data[ticker]
+            closes = t["Close"].dropna()
             if len(closes) < 2:
                 continue
 
             prev_close = float(closes.iloc[-2])
             last_close = float(closes.iloc[-1])
-            volume = float(volumes.iloc[-1]) if not volumes.empty else 0
+            volume = float(t["Volume"].iloc[-1])
 
             if last_close < _MIN_PRICE or volume < _MIN_VOLUME:
                 continue
@@ -73,9 +61,9 @@ def get_previous_day_movers(tickers: list[str], limit: int = 20) -> list[dict]:
                     "ticker": ticker,
                     "direction": "up" if change_pct >= 0 else "down",
                     "price": round(last_close, 2),
-                    "open": round(float(opens.iloc[-1]), 2) if not opens.empty else None,
-                    "high": round(float(highs.iloc[-1]), 2) if not highs.empty else None,
-                    "low": round(float(lows.iloc[-1]), 2) if not lows.empty else None,
+                    "open": round(float(t["Open"].iloc[-1]), 2),
+                    "high": round(float(t["High"].iloc[-1]), 2),
+                    "low": round(float(t["Low"].iloc[-1]), 2),
                     "change_pct": change_pct,
                     "volume": int(volume),
                     "vwap": None,

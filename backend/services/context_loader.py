@@ -3,7 +3,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
-from services import dynamo_service, finnhub_service, polygon_service, portfolio_factory
+from services import dynamo_service, finnhub_service, market_data_service, portfolio_factory
 from services.guardrail_service import GuardrailContext, get_status
 
 ET = ZoneInfo("America/New_York")
@@ -139,10 +139,10 @@ def load_context(
 
     # ── Scanner + movers ──────────────────────────────────────────────────────
     try:
-        scanner_results = polygon_service.get_scanner_results(
+        scanner_results = market_data_service.get_scanner_results(
             tickers, min_change_pct=min_change_pct
         )
-        top_movers = polygon_service.get_previous_day_movers(tickers, limit=10)
+        top_movers = market_data_service.get_previous_day_movers(tickers, limit=10)
     except Exception:
         scanner_results = []
         top_movers = []
