@@ -2,5 +2,6 @@
 uvicorn[standard]
 pytest
 pytest-mock
+moto[dynamodb]
 black
 isort

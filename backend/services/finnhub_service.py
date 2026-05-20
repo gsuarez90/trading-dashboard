@@ -46,9 +46,9 @@ def get_batch_quotes(tickers: list[str]) -> list[dict]:
                     "high": q.get("h"),
                     "low": q.get("l"),
                     "prev_close": prev_close,
-                    "change_pct": round((current - prev_close) / prev_close * 100, 2)
-                    if prev_close
-                    else None,
+                    "change_pct": (
+                        round((current - prev_close) / prev_close * 100, 2) if prev_close else None
+                    ),
                 }
             )
         except Exception:

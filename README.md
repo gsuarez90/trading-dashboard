@@ -91,13 +91,17 @@ Key settings:
 │   │   ├── market.py                # GET /market/quote, /market/quotes, /market/news
 │   │   ├── portfolio.py             # GET /portfolio/, /portfolio/cash
 │   │   └── scanner.py               # GET /scanner/movers, /scanner/results
+│   ├── models/
+│   │   └── schemas.py               # Pydantic models: TradeSetup, PaperTrade, DailyCashSummary
 │   ├── services/
+│   │   ├── dynamo_service.py        # DynamoDB CRUD for trade records
 │   │   ├── finnhub_service.py       # Quotes + news via Finnhub
 │   │   ├── polygon_service.py       # Daily bars + movers via yfinance
 │   │   ├── portfolio_factory.py     # Returns live or synthetic provider
 │   │   ├── robinhood_service.py     # Live positions + cash via robin_stocks
 │   │   └── synthetic_portfolio.py  # Static demo data for public version
-│   └── tests/                       # pytest test suite
+│   └── tests/
+│   │   └── test_dynamo_service.py   # DynamoDB service tests (moto mock)
 ├── frontend/                        # React + Vite (planned)
 ├── scripts/
 │   └── verify_apis.py               # Pre-build API connectivity check
@@ -133,7 +137,7 @@ These are tested in `backend/tests/test_guardrails.py` and block merge via GitHu
   - [x] Step 2 — Scanner router + yfinance market data service
   - [x] Step 3 — Portfolio layer (Robinhood + synthetic + factory)
   - [x] Step 4 — Finnhub service (quotes + news) + market router
-  - [ ] Step 5 — DynamoDB models + trade tracking
+  - [x] Step 5 — Pydantic schemas + DynamoDB service + moto tests
   - [ ] Step 6 — Guardrails engine + tests
   - [ ] Step 7 — Claude trade suggestion service
   - [ ] Step 8 — Morning briefing Lambda

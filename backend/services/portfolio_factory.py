@@ -16,6 +16,8 @@ def get_provider():
     mode = os.environ.get("PORTFOLIO_MODE", "synthetic").lower()
     if mode == "live":
         from services import robinhood_service
+
         return robinhood_service
     from services import synthetic_portfolio
+
     return synthetic_portfolio
