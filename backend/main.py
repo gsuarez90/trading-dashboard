@@ -1,7 +1,14 @@
+from dotenv import load_dotenv
+
+load_dotenv(dotenv_path=".env.local")  # No-op in Lambda — env vars come from SSM
+
 from fastapi import FastAPI
 from mangum import Mangum
 
+from routers import scanner
+
 app = FastAPI(title="AI Trading Dashboard")
+app.include_router(scanner.router)
 
 
 @app.get("/health")

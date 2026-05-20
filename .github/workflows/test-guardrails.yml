@@ -19,4 +19,4 @@ jobs:
         run: pip install -r backend/requirements.txt
 
       - name: Run guardrail tests
-        run: pytest backend/tests/test_guardrails.py -v
+        run: pytest backend/tests/test_guardrails.py -v --tb=short
