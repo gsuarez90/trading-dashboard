@@ -104,7 +104,8 @@ Key settings:
 │   │   ├── guardrail_service.py     # 8 guardrails, kill switch, GuardrailContext/Result
 │   │   └── synthetic_portfolio.py  # Static demo data for public version
 │   └── tests/
-│   │   └── test_dynamo_service.py   # DynamoDB service tests (moto mock)
+│       ├── test_dynamo_service.py   # DynamoDB service tests (moto mock)
+│       └── test_guardrails.py       # 14 guardrail tests — hard gate before live trading
 ├── frontend/                        # React + Vite (planned)
 ├── scripts/
 │   └── verify_apis.py               # Pre-build API connectivity check
@@ -143,7 +144,8 @@ These are tested in `backend/tests/test_guardrails.py` and block merge via GitHu
   - [x] Step 5 — Finnhub sentiment scoring (VADER) + sentiment router + market router
   - [x] Step 5b — Pydantic schemas + DynamoDB service + moto tests (built early as foundation)
   - [x] Step 6 — `guardrail_service.py` — all 8 guardrails + kill switch + guardrails router
-  - [ ] Step 7 — Claude trade suggestion service
+  - [x] Step 7 — `tests/test_guardrails.py` — 14/14 passing ✓ (hard gate before live trading)
+  - [ ] Step 8 — `context_loader.py` — full daily context assembly
   - [ ] Step 8 — Morning briefing Lambda
   - [ ] Step 9 — Price monitor Lambda
 - [ ] Phase 2 — Frontend dashboard
