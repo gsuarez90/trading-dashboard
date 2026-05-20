@@ -2,6 +2,9 @@ import os
 from datetime import date, timedelta
 
 import finnhub
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+
+_analyzer = SentimentIntensityAnalyzer()
 
 
 def _client() -> finnhub.Client:
@@ -79,3 +82,71 @@ def get_company_news(ticker: str, days: int = 7) -> list[dict]:
         )
     articles.sort(key=lambda x: x["published_at"] or 0, reverse=True)
     return articles
+
+
+def score_sentiment(ticker: str, days: int = 3) -> dict:
+    """Aggregate news sentiment for a ticker over the past N days.
+
+    Scores each headline with VADER, averages the compound scores, and returns
+    a structured result for the context_loader briefing payload.
+
+    Returned shape:
+    {
+        "ticker": str,
+        "score": float,          # -1.0 (very bearish) to +1.0 (very bullish)
+        "label": str,            # "bullish" | "neutral" | "bearish"
+        "article_count": int,
+        "top_headlines": list[str]   # 3 most recent headlines
+    }
+    """
+    articles = get_company_news(ticker, days=days)
+    if not articles:
+        return {
+            "ticker": ticker.upper(),
+            "score": 0.0,
+            "label": "neutral",
+            "article_count": 0,
+            "top_headlines": [],
+        }
+
+    scores = []
+    for article in articles:
+        text = article.get("headline", "") + " " + article.get("summary", "")
+        vs = _analyzer.polarity_scores(text.strip())
+        scores.append(vs["compound"])
+
+    avg_score = round(sum(scores) / len(scores), 4)
+
+    if avg_score >= 0.05:
+        label = "bullish"
+    elif avg_score <= -0.05:
+        label = "bearish"
+    else:
+        label = "neutral"
+
+    return {
+        "ticker": ticker.upper(),
+        "score": avg_score,
+        "label": label,
+        "article_count": len(articles),
+        "top_headlines": [a["headline"] for a in articles[:3]],
+    }
+
+
+def score_batch_sentiment(tickers: list[str], days: int = 3) -> list[dict]:
+    """Sentiment scores for a list of tickers. Used by the morning refresh Lambda."""
+    results = []
+    for ticker in tickers:
+        try:
+            results.append(score_sentiment(ticker, days=days))
+        except Exception:
+            results.append(
+                {
+                    "ticker": ticker.upper(),
+                    "score": 0.0,
+                    "label": "neutral",
+                    "article_count": 0,
+                    "top_headlines": [],
+                }
+            )
+    return results

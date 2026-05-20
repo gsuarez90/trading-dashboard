@@ -89,13 +89,14 @@ Key settings:
 │   ├── main.py                      # FastAPI app + Lambda handlers
 │   ├── routers/
 │   │   ├── market.py                # GET /market/quote, /market/quotes, /market/news
-│   │   ├── portfolio.py             # GET /portfolio/, /portfolio/cash
-│   │   └── scanner.py               # GET /scanner/movers, /scanner/results
+│   │   ├── portfolio.py             # GET /portfolio/ (enriched), /portfolio/cash
+│   │   ├── scanner.py               # GET /scanner/movers, /scanner/results
+│   │   └── sentiment.py             # GET /sentiment/{ticker}, /sentiment/batch/scores
 │   ├── models/
 │   │   └── schemas.py               # Pydantic models: TradeSetup, PaperTrade, DailyCashSummary
 │   ├── services/
 │   │   ├── dynamo_service.py        # DynamoDB CRUD for trade records
-│   │   ├── finnhub_service.py       # Quotes + news via Finnhub
+│   │   ├── finnhub_service.py       # Quotes, news, and VADER sentiment scoring via Finnhub
 │   │   ├── polygon_service.py       # Daily bars + movers via yfinance
 │   │   ├── portfolio_factory.py     # Returns live or synthetic provider
 │   │   ├── robinhood_service.py     # Live positions + cash via robin_stocks
@@ -136,8 +137,9 @@ These are tested in `backend/tests/test_guardrails.py` and block merge via GitHu
   - [x] Step 1 — Project structure, pyproject.toml, requirements
   - [x] Step 2 — Scanner router + yfinance market data service
   - [x] Step 3 — Portfolio layer (Robinhood + synthetic + factory)
-  - [x] Step 4 — Finnhub service (quotes + news) + market router
-  - [x] Step 5 — Pydantic schemas + DynamoDB service + moto tests
+  - [x] Step 4 — Portfolio router with HoldingContext enrichment (current price + unrealized P&L)
+  - [x] Step 5 — Finnhub sentiment scoring (VADER) + sentiment router + market router
+  - [x] Step 5b — Pydantic schemas + DynamoDB service + moto tests (built early as foundation)
   - [ ] Step 6 — Guardrails engine + tests
   - [ ] Step 7 — Claude trade suggestion service
   - [ ] Step 8 — Morning briefing Lambda
