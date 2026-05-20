@@ -92,7 +92,7 @@ Key settings:
 │   │   ├── portfolio.py             # GET /portfolio/ (enriched), /portfolio/cash
 │   │   ├── scanner.py               # GET /scanner/movers, /scanner/results
 │   │   ├── sentiment.py             # GET /sentiment/{ticker}, /sentiment/batch/scores
-│   │   ├── ai.py                    # GET /ai/briefing
+│   │   ├── ai.py                    # GET /ai/briefing, POST /ai/chat, POST /ai/suggest-trades
 │   │   └── guardrails.py            # GET /guardrails/status, POST /guardrails/kill-switch
 │   ├── models/
 │   │   └── schemas.py               # Pydantic models: TradeSetup, PaperTrade, DailyCashSummary
@@ -151,7 +151,7 @@ These are tested in `backend/tests/test_guardrails.py` and block merge via GitHu
   - [x] Step 8 — `context_loader.py` — full daily context assembly (`DailyContext` dataclass)
   - [x] Step 9 — `schemas.py` — all Phase 1 models (done early as foundation)
   - [x] Step 10 — `claude_service.py` + `GET /ai/briefing` endpoint
-  - [ ] Step 11 — `/ai/chat` + `/ai/suggest-trades` endpoints
+  - [x] Step 11 — `POST /ai/chat` + `POST /ai/suggest-trades` endpoints (guardrails enforced server-side)
   - [ ] Step 12 — `paper_trading_service.py` + paper trading endpoints
   - [ ] Step 13 — `live_tracking_service.py` + live trade logging endpoints
 - [ ] Phase 2 — Frontend dashboard
