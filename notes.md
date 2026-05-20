@@ -173,3 +173,39 @@ What that means practically for your app:
   - Anyone who breaches S3/DynamoDB storage layer directly → gets encrypted data they can't read
 
 The key policy in KMS is what enforces all of this — it's the definitive access list. CloudTrail logs every time any of these principals uses the key, so you'd have a full audit trail if anything unexpected happened.
+
+---
+
+## What Vite Is
+
+Vite is a frontend build tool — it serves two purposes:
+
+1. **Dev server** (`npm run dev`) — runs locally with hot reload so changes appear instantly without a manual refresh
+2. **Production bundler** (`npm run build`) — takes all React components, CSS, and JS and packages them into optimized static files ready to upload to S3
+
+It replaces older tools like Create React App or Webpack, and is significantly faster because it uses native ES modules during development instead of bundling everything upfront.
+
+**Why it matters for this project specifically:**
+- The `npm run build` output is what gets synced to S3 in the GitHub Actions deploy workflow
+- `VITE_API_URL` is how the frontend knows which backend to call (public vs private deployment) — Vite bakes env vars prefixed with `VITE_` into the built bundle at build time
+
+Stack summary: **React** = the UI framework (components, state, rendering) + **Vite** = the tooling that runs and builds it.
+
+---
+
+## ES Modules (ESM)
+
+ES modules is the modern JavaScript standard for splitting code across files that can share functionality. Before ESM, there was no built-in module system — developers used CommonJS (`require()`/`module.exports`), which Node.js popularized. ESM was standardized in ES2015 and is now natively supported by all modern browsers and Node.
+
+The syntax:
+```js
+// export from one file
+export function add(a, b) { return a + b }
+
+// import in another file
+import { add } from './math.js'
+```
+
+**Why it matters for Vite:** During development, Vite serves source files as-is directly to the browser using native ESM — the browser itself handles the imports. This is why Vite starts nearly instantly regardless of project size, while older tools like Webpack had to bundle everything into one big file before you could load the page at all. For production, Vite still bundles (via Rollup) for optimized S3 deployment.
+
+**Practical takeaway:** React components use ESM automatically via `import`/`export`. It's the reason Vite is fast — no upfront bundling in dev.
