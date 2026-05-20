@@ -93,12 +93,16 @@ Key settings:
 │   │   ├── scanner.py               # GET /scanner/movers, /scanner/results
 │   │   ├── sentiment.py             # GET /sentiment/{ticker}, /sentiment/batch/scores
 │   │   ├── ai.py                    # GET /ai/briefing, POST /ai/chat, POST /ai/suggest-trades
+│   │   ├── paper_trading.py         # POST /paper-trades, GET /paper-trades, POST /{id}/close
+│   │   ├── live_tracking.py         # POST /live-trades, GET /live-trades, POST /{id}/exit
 │   │   └── guardrails.py            # GET /guardrails/status, POST /guardrails/kill-switch
 │   ├── models/
 │   │   └── schemas.py               # Pydantic models: TradeSetup, PaperTrade, DailyCashSummary
 │   ├── services/
 │   │   ├── claude_service.py        # Anthropic API calls — morning briefing + trade suggestions
 │   │   ├── context_loader.py        # DailyContext assembly — scanner + sentiment + portfolio + trades
+│   │   ├── paper_trading_service.py # open_trade, close_trade, get_daily_summary
+│   │   ├── live_tracking_service.py # log_trade, log_exit, get_live_summary (manual Robinhood logging)
 │   │   ├── dynamo_service.py        # DynamoDB CRUD for trade records
 │   │   ├── finnhub_service.py       # Quotes, news, and VADER sentiment scoring via Finnhub
 │   │   ├── polygon_service.py       # Daily bars + movers via yfinance
@@ -152,8 +156,8 @@ These are tested in `backend/tests/test_guardrails.py` and block merge via GitHu
   - [x] Step 9 — `schemas.py` — all Phase 1 models (done early as foundation)
   - [x] Step 10 — `claude_service.py` + `GET /ai/briefing` endpoint
   - [x] Step 11 — `POST /ai/chat` + `POST /ai/suggest-trades` endpoints (guardrails enforced server-side)
-  - [ ] Step 12 — `paper_trading_service.py` + paper trading endpoints
-  - [ ] Step 13 — `live_tracking_service.py` + live trade logging endpoints
+  - [x] Step 12 — `paper_trading_service.py` + paper trading endpoints (8 tests passing)
+  - [x] Step 13 — `live_tracking_service.py` + live trade logging endpoints (6 tests passing)
 - [ ] Phase 2 — Frontend dashboard
 - [ ] Phase 3 — Live trading + Robinhood execution
 - [ ] Phase 4 — SageMaker ML on trade history
