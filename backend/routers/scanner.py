@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query
 
-from services import market_data_service, portfolio_factory
+from services import market_data_service
+from services.context_loader import _get_watchlist
 
 router = APIRouter(prefix="/scanner", tags=["scanner"])
 
@@ -8,14 +9,12 @@ router = APIRouter(prefix="/scanner", tags=["scanner"])
 def _resolve_tickers(tickers: str | None) -> list[str]:
     if tickers:
         return [t.strip().upper() for t in tickers.split(",") if t.strip()]
-    provider = portfolio_factory.get_provider()
-    portfolio = provider.get_portfolio()
-    return [p["ticker"] for p in portfolio.get("positions", [])]
+    return _get_watchlist()
 
 
 @router.get("/movers")
 def get_movers(
-    tickers: str | None = Query(default=None, description="Comma-separated ticker list; defaults to portfolio holdings"),
+    tickers: str | None = Query(default=None, description="Comma-separated ticker list; defaults to watchlist"),
     limit: int = Query(default=20, ge=2, le=50),
 ):
     try:
@@ -26,7 +25,7 @@ def get_movers(
 
 @router.get("/results")
 def get_results(
-    tickers: str | None = Query(default=None, description="Comma-separated ticker list; defaults to portfolio holdings"),
+    tickers: str | None = Query(default=None, description="Comma-separated ticker list; defaults to watchlist"),
     min_change_pct: float = Query(default=2.0, ge=0),
 ):
     try:

@@ -1,4 +1,5 @@
 import DailySummaryPanel from './components/DailySummaryPanel'
+import ChatPanel from './components/ChatPanel'
 import ScannerPanel from './components/ScannerPanel'
 import SentimentFeed from './components/SentimentFeed'
 import PortfolioView from './components/PortfolioView'
@@ -14,6 +15,10 @@ export default function App() {
 
       <div style={{ marginBottom: 16 }}>
         <DailySummaryPanel />
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <ChatPanel />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>

@@ -85,12 +85,23 @@ When generating trade suggestions:
 - Never suggest selling below cost basis unless allow_loss is true
 - Populate robinhood_instructions with exact plain english steps including
   the 3:45pm alarm reminder
-- Return TradeSuggestionResponse JSON exactly
-- If no clean setup exists return recommended: null
+- If no clean setup exists, return an empty suggestions list and recommended: null
 
 Never force a trade to hit the goal by taking disproportionate risk.
 
-Return ONLY a valid JSON object matching TradeSuggestionResponse. No markdown, no explanation.\
+Return ONLY a single valid JSON object with this exact top-level structure (no markdown, no explanation):
+{{
+  "goal": <float>,
+  "profit_mode": <string>,
+  "trade_scope": <string>,
+  "suggestions": [ <TradeSetup objects> ],
+  "risk_note": <string>,
+  "market_conditions": <string>,
+  "intraday_viability": <string or null>,
+  "recommended": <TradeSetup or null>,
+  "guardrails_checked": [],
+  "any_guardrail_triggered": false
+}}\
 """
 
 _anthropic_client: anthropic.Anthropic | None = None
@@ -167,9 +178,25 @@ def suggest_trades(
         system=system,
         messages=[{"role": "user", "content": json.dumps(payload, default=str)}],
     )
-    suggestion = TradeSuggestionResponse.model_validate_json(
-        _extract_json(response.content[0].text)
-    )
+    raw = _extract_json(response.content[0].text)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Claude returned invalid JSON: {e}")
+
+    # Inject envelope fields in case Claude omitted them
+    parsed.setdefault("goal", ctx.daily_goal)
+    parsed.setdefault("profit_mode", ctx.profit_mode)
+    parsed.setdefault("trade_scope", ctx.trade_scope)
+    parsed.setdefault("suggestions", [])
+    parsed.setdefault("risk_note", "")
+    parsed.setdefault("market_conditions", "")
+    parsed.setdefault("intraday_viability", None)
+    parsed.setdefault("recommended", None)
+    parsed.setdefault("guardrails_checked", [])
+    parsed.setdefault("any_guardrail_triggered", False)
+
+    suggestion = TradeSuggestionResponse.model_validate(parsed)
 
     # Server-side guardrail check — same code path paper and live
     guardrail_ctx = GuardrailContext(
