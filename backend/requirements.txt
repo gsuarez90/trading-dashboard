@@ -2,8 +2,9 @@ fastapi
 mangum
 boto3
 anthropic
-polygon-api-client
+yfinance
 finnhub-python
 robin-stocks
+schwab-py
 python-dotenv
 httpx

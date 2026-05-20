@@ -22,6 +22,7 @@ samconfig.toml
 # Secrets — NEVER commit
 .env.local
 .env.*.local
+schwab_token.json
 
 # Claude Code local data
 .claude/

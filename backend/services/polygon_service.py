@@ -1,82 +1,126 @@
-import os
-from datetime import datetime
+"""
+Market data service backed by yfinance (free, ~15-min delayed during market hours).
+Replaces the Polygon.io dependency which was removed from requirements.txt.
+"""
 
-from polygon import RESTClient
+from datetime import date, timedelta
+
+import yfinance as yf
 
 _MIN_PRICE = 5.0
 _MIN_VOLUME = 500_000
 
 
-def _client() -> RESTClient:
-    return RESTClient(api_key=os.environ["POLYGON_API_KEY"])
+def _pct_change(prev: float, last: float) -> float:
+    return round((last - prev) / prev * 100, 2)
 
 
-def get_intraday_movers(limit: int = 20) -> list[dict]:
-    """Top gainers and losers. Filters penny stocks (<$5) and thin volume (<500k)."""
-    client = _client()
-    raw_gainers = client.get_snapshot_direction("stocks", "gainers", include_otc=False) or []
-    raw_losers = client.get_snapshot_direction("stocks", "losers", include_otc=False) or []
+def get_previous_day_movers(tickers: list[str], limit: int = 20) -> list[dict]:
+    """Previous-day % movers for a given ticker list.
 
-    def _shape(snap, direction: str) -> dict | None:
-        price = (
-            getattr(snap.min, "c", None)
-            or getattr(snap.day, "c", None)
-            or getattr(snap.prev_day, "c", None)
-        )
-        volume = getattr(snap.day, "v", 0) or 0
-        if not price or price < _MIN_PRICE or volume < _MIN_VOLUME:
-            return None
-        return {
-            "ticker": snap.ticker,
-            "direction": direction,
-            "price": price,
-            "change_pct": round(snap.todays_change_perc or 0, 2),
-            "change_dollar": round(snap.todays_change or 0, 2),
-            "volume": int(volume),
-            "vwap": getattr(snap.day, "vw", None),
-        }
+    Downloads 5 days of daily bars via yfinance and computes the most recent
+    day-over-day change. Sorted by absolute % change, descending.
+    """
+    if not tickers:
+        return []
 
-    half = limit // 2
-    gainers = [r for s in raw_gainers[: half * 2] if (r := _shape(s, "up"))][:half]
-    losers = [r for s in raw_losers[: half * 2] if (r := _shape(s, "down"))][:half]
-    return gainers + losers
+    from_date = (date.today() - timedelta(days=7)).strftime("%Y-%m-%d")
+    to_date = date.today().strftime("%Y-%m-%d")
 
-
-def get_stock_price(ticker: str) -> float | None:
-    """Most recent price for a ticker. Returns None if unavailable."""
-    client = _client()
-    snap = client.get_snapshot_ticker("stocks", ticker)
-    if not snap:
-        return None
-    return (
-        getattr(snap.min, "c", None)
-        or getattr(snap.day, "c", None)
-        or getattr(snap.prev_day, "c", None)
+    data = yf.download(
+        tickers,
+        start=from_date,
+        end=to_date,
+        interval="1d",
+        progress=False,
+        auto_adjust=True,
+        group_by="ticker" if len(tickers) > 1 else "column",
     )
 
+    if data.empty:
+        return []
 
-def get_scanner_results(min_change_pct: float = 2.0) -> list[dict]:
-    """Daily scan — movers filtered to a minimum % change threshold."""
-    movers = get_intraday_movers(limit=40)
+    results = []
+    for ticker in tickers:
+        try:
+            if len(tickers) == 1:
+                closes = data["Close"]
+                opens = data["Open"]
+                highs = data["High"]
+                lows = data["Low"]
+                volumes = data["Volume"]
+            else:
+                closes = data["Close"][ticker]
+                opens = data["Open"][ticker]
+                highs = data["High"][ticker]
+                lows = data["Low"][ticker]
+                volumes = data["Volume"][ticker]
+
+            closes = closes.dropna()
+            if len(closes) < 2:
+                continue
+
+            prev_close = float(closes.iloc[-2])
+            last_close = float(closes.iloc[-1])
+            volume = float(volumes.iloc[-1]) if not volumes.empty else 0
+
+            if last_close < _MIN_PRICE or volume < _MIN_VOLUME:
+                continue
+
+            change_pct = _pct_change(prev_close, last_close)
+            results.append(
+                {
+                    "ticker": ticker,
+                    "direction": "up" if change_pct >= 0 else "down",
+                    "price": round(last_close, 2),
+                    "open": round(float(opens.iloc[-1]), 2) if not opens.empty else None,
+                    "high": round(float(highs.iloc[-1]), 2) if not highs.empty else None,
+                    "low": round(float(lows.iloc[-1]), 2) if not lows.empty else None,
+                    "change_pct": change_pct,
+                    "volume": int(volume),
+                    "vwap": None,
+                }
+            )
+        except Exception:
+            continue
+
+    results.sort(key=lambda x: abs(x["change_pct"]), reverse=True)
+    return results[:limit]
+
+
+def get_scanner_results(tickers: list[str], min_change_pct: float = 2.0) -> list[dict]:
+    """Daily scan for the morning briefing — movers above a % threshold."""
+    movers = get_previous_day_movers(tickers, limit=len(tickers))
     return [m for m in movers if abs(m["change_pct"]) >= min_change_pct]
 
 
 def get_daily_bars(ticker: str, from_date: str, to_date: str) -> list[dict]:
-    """Daily OHLCV bars for a ticker. Dates as 'YYYY-MM-DD'."""
-    client = _client()
-    bars = client.get_aggs(ticker, 1, "day", from_date, to_date, adjusted=True) or []
+    """Daily OHLCV bars for a ticker. Dates as 'YYYY-MM-DD'.
+
+    Used for paper trade validation and backtesting.
+    """
+    data = yf.download(
+        ticker,
+        start=from_date,
+        end=to_date,
+        interval="1d",
+        progress=False,
+        auto_adjust=True,
+    )
+    if data.empty:
+        return []
+
     result = []
-    for b in bars:
-        ts = getattr(b, "timestamp", None)
+    for ts, row in data.iterrows():
         result.append(
             {
-                "date": datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d") if ts else None,
-                "open": getattr(b, "open", None),
-                "high": getattr(b, "high", None),
-                "low": getattr(b, "low", None),
-                "close": getattr(b, "close", None),
-                "volume": getattr(b, "volume", None),
-                "vwap": getattr(b, "vwap", None),
+                "date": ts.strftime("%Y-%m-%d"),
+                "open": round(float(row["Open"]), 2),
+                "high": round(float(row["High"]), 2),
+                "low": round(float(row["Low"]), 2),
+                "close": round(float(row["Close"]), 2),
+                "volume": int(row["Volume"]),
+                "vwap": None,
             }
         )
     return result
