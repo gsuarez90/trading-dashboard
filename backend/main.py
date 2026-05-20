@@ -1,6 +1,8 @@
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-load_dotenv(dotenv_path=".env.local")  # No-op in Lambda — env vars come from SSM
+load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env.local")  # No-op in Lambda
 
 from fastapi import FastAPI
 from mangum import Mangum
