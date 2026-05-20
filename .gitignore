@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+
+# Node
+node_modules/
+.npm
+
+# AWS SAM
+.aws-sam/
+samconfig.toml
+
+# Secrets — NEVER commit
+.env.local
+.env.*.local
+
+# Claude Code local data
+.claude/
+CLAUDE.md
+.playwright-mcp/
+
+# Misc
+*.png
+*.log
+markdown-preview.css
