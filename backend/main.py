@@ -7,7 +7,7 @@ load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env.local")  
 from fastapi import FastAPI
 from mangum import Mangum
 
-from routers import guardrails, market, portfolio, scanner, sentiment
+from routers import ai, guardrails, market, portfolio, scanner, sentiment
 
 app = FastAPI(title="AI Trading Dashboard")
 app.include_router(scanner.router)
@@ -15,6 +15,7 @@ app.include_router(portfolio.router)
 app.include_router(market.router)
 app.include_router(sentiment.router)
 app.include_router(guardrails.router)
+app.include_router(ai.router)
 
 
 @app.get("/health")

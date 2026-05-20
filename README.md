@@ -92,10 +92,12 @@ Key settings:
 │   │   ├── portfolio.py             # GET /portfolio/ (enriched), /portfolio/cash
 │   │   ├── scanner.py               # GET /scanner/movers, /scanner/results
 │   │   ├── sentiment.py             # GET /sentiment/{ticker}, /sentiment/batch/scores
+│   │   ├── ai.py                    # GET /ai/briefing
 │   │   └── guardrails.py            # GET /guardrails/status, POST /guardrails/kill-switch
 │   ├── models/
 │   │   └── schemas.py               # Pydantic models: TradeSetup, PaperTrade, DailyCashSummary
 │   ├── services/
+│   │   ├── claude_service.py        # Anthropic API calls — morning briefing + trade suggestions
 │   │   ├── context_loader.py        # DailyContext assembly — scanner + sentiment + portfolio + trades
 │   │   ├── dynamo_service.py        # DynamoDB CRUD for trade records
 │   │   ├── finnhub_service.py       # Quotes, news, and VADER sentiment scoring via Finnhub
@@ -147,8 +149,8 @@ These are tested in `backend/tests/test_guardrails.py` and block merge via GitHu
   - [x] Step 6 — `guardrail_service.py` — all 8 guardrails + kill switch + guardrails router
   - [x] Step 7 — `tests/test_guardrails.py` — 14/14 passing ✓ (hard gate before live trading)
   - [x] Step 8 — `context_loader.py` — full daily context assembly (`DailyContext` dataclass)
-  - [ ] Step 9 — `schemas.py` — all Phase 1 models (done early as foundation)
-  - [ ] Step 10 — `claude_service.py` + `/ai/briefing` endpoint
+  - [x] Step 9 — `schemas.py` — all Phase 1 models (done early as foundation)
+  - [x] Step 10 — `claude_service.py` + `GET /ai/briefing` endpoint
   - [ ] Step 11 — `/ai/chat` + `/ai/suggest-trades` endpoints
   - [ ] Step 12 — `paper_trading_service.py` + paper trading endpoints
   - [ ] Step 13 — `live_tracking_service.py` + live trade logging endpoints
