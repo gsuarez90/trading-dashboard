@@ -1,0 +1,6 @@
+-r requirements.txt
+uvicorn[standard]
+pytest
+pytest-mock
+black
+isort
