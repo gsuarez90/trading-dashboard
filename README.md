@@ -86,16 +86,24 @@ Key settings:
 
 ```
 ├── backend/
-│   ├── main.py               # FastAPI app + Lambda handlers
-│   ├── routers/              # API route handlers
-│   ├── services/             # Business logic + external API clients
-│   └── tests/                # pytest test suite
-├── frontend/                 # React + Vite (planned)
+│   ├── main.py                      # FastAPI app + Lambda handlers
+│   ├── routers/
+│   │   ├── market.py                # GET /market/quote, /market/quotes, /market/news
+│   │   ├── portfolio.py             # GET /portfolio/, /portfolio/cash
+│   │   └── scanner.py               # GET /scanner/movers, /scanner/results
+│   ├── services/
+│   │   ├── finnhub_service.py       # Quotes + news via Finnhub
+│   │   ├── polygon_service.py       # Daily bars + movers via yfinance
+│   │   ├── portfolio_factory.py     # Returns live or synthetic provider
+│   │   ├── robinhood_service.py     # Live positions + cash via robin_stocks
+│   │   └── synthetic_portfolio.py  # Static demo data for public version
+│   └── tests/                       # pytest test suite
+├── frontend/                        # React + Vite (planned)
 ├── scripts/
-│   └── verify_apis.py        # Pre-build API connectivity check
-├── .github/workflows/        # CI/CD (deploy, lint, test-guardrails)
-├── .env.example              # Key reference — no real values
-└── template.yaml             # AWS SAM IaC (planned)
+│   └── verify_apis.py               # Pre-build API connectivity check
+├── .github/workflows/               # CI/CD (deploy, lint, test-guardrails)
+├── .env.example                     # Key reference — no real values
+└── template.yaml                    # AWS SAM IaC (planned)
 ```
 
 ---
@@ -121,6 +129,15 @@ These are tested in `backend/tests/test_guardrails.py` and block merge via GitHu
 
 - [x] Phase 0 — Scaffolding, CI/CD, API verification
 - [ ] Phase 1 — Core trading loop (scanner → Claude → paper trades → DynamoDB)
+  - [x] Step 1 — Project structure, pyproject.toml, requirements
+  - [x] Step 2 — Scanner router + yfinance market data service
+  - [x] Step 3 — Portfolio layer (Robinhood + synthetic + factory)
+  - [x] Step 4 — Finnhub service (quotes + news) + market router
+  - [ ] Step 5 — DynamoDB models + trade tracking
+  - [ ] Step 6 — Guardrails engine + tests
+  - [ ] Step 7 — Claude trade suggestion service
+  - [ ] Step 8 — Morning briefing Lambda
+  - [ ] Step 9 — Price monitor Lambda
 - [ ] Phase 2 — Frontend dashboard
 - [ ] Phase 3 — Live trading + Robinhood execution
 - [ ] Phase 4 — SageMaker ML on trade history
