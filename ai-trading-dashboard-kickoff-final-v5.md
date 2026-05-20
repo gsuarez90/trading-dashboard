@@ -18,8 +18,8 @@ All live trades are placed manually by the user in the Robinhood app.
 
 ```
 Public version (yourapp.com):
-  Cloudflare (rate limiting + DDoS protection)
-    → CloudFront (CDN + SSL)
+  Porkbun DNS (CNAME → CloudFront)
+    → CloudFront + AWS Shield Standard (CDN + SSL + DDoS)
       → S3 (React frontend files)
         → API Gateway
           → Lambda (FastAPI backend)
@@ -27,8 +27,8 @@ Public version (yourapp.com):
             → S3 (Plotly analytics charts)
 
 Personal version (private.yourapp.com):
-  Cloudflare Access (email PIN authentication — free, 1 user)
-    → CloudFront (CDN + SSL)
+  Porkbun DNS (CNAME → CloudFront)
+    → CloudFront + Lambda@Edge (CDN + SSL + HTTP Basic Auth)
       → S3 (React frontend files — private bucket)
         → API Gateway
           → Lambda (FastAPI backend — live Robinhood)
