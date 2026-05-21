@@ -4,6 +4,7 @@ import re
 import anthropic
 
 from models.schemas import TradeSuggestionResponse
+from services import dynamo_service
 from services.context_loader import DailyContext
 from services.guardrail_service import GuardrailContext, check_all
 
@@ -49,7 +50,7 @@ _CHAT_SYSTEM = """\
 You are a personal trading analyst assistant. Full daily context is in
 the payload including scanner results, intraday movers, sentiment,
 portfolio with cost basis, cash balance, trade history, realized P&L,
-guardrail status, and minutes remaining in session.
+guardrail status, guardrail_events (trades blocked today with ticker and rule), and minutes remaining in session.
 
 Current settings:
 - Profit mode: {profit_mode}
@@ -252,10 +253,18 @@ def suggest_trades(
         if check_all(trade, guardrail_ctx).triggered:
             any_triggered = True
 
-    # If the recommended trade itself fails guardrails, block it
+    # If the recommended trade itself fails guardrails, block it and log the event
     if suggestion.recommended is not None:
         rec_result = check_all(suggestion.recommended, guardrail_ctx)
         if not rec_result.allowed:
+            try:
+                dynamo_service.log_guardrail_event(
+                    ticker=suggestion.recommended.ticker,
+                    rules_triggered=rec_result.triggered,
+                    messages=rec_result.messages,
+                )
+            except Exception:
+                pass
             blocked_msgs = "; ".join(rec_result.messages)
             suggestion.recommended = None
             suggestion.risk_note = (

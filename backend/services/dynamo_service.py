@@ -1,11 +1,16 @@
 import os
+import uuid
+from datetime import datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 
 from models.schemas import PaperTrade
+
+ET = ZoneInfo("America/New_York")
 
 
 def _resource():
@@ -156,3 +161,38 @@ def get_trade_count_today(date: str) -> int:
     """Number of trades opened today. Used by the daily trade limit guardrail."""
     trades = get_trades_by_date(date)
     return len(trades)
+
+
+# ── Guardrail events ──────────────────────────────────────────────────────────
+
+
+def log_guardrail_event(
+    ticker: str,
+    rules_triggered: list[str],
+    messages: list[str],
+    date: str | None = None,
+    timestamp: str | None = None,
+) -> None:
+    """Persist a guardrail trigger event. Stored in the same table as trades,
+    queryable via the status-date-index GSI using status='guardrail_event'."""
+    now = datetime.now(tz=ET)
+    _table().put_item(Item={
+        "trade_id": str(uuid.uuid4()),
+        "record_type": "guardrail_event",
+        "status": "guardrail_event",
+        "date": date or now.strftime("%Y-%m-%d"),
+        "timestamp": timestamp or now.isoformat(),
+        "ticker": ticker,
+        "rules_triggered": rules_triggered,
+        "messages": messages,
+    })
+
+
+def get_guardrail_events_by_date(date: str) -> list[dict]:
+    """Fetch all guardrail events for a given date, newest first."""
+    response = _table().query(
+        IndexName="status-date-index",
+        KeyConditionExpression=Key("status").eq("guardrail_event") & Key("date").eq(date),
+    )
+    events = [_from_item(item) for item in response.get("Items", [])]
+    return sorted(events, key=lambda e: e.get("timestamp", ""), reverse=True)

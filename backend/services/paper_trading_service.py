@@ -42,6 +42,16 @@ def open_trade(
     )
     result = check_all(setup, ctx)
     if not result.allowed:
+        try:
+            dynamo_service.log_guardrail_event(
+                ticker=setup.ticker,
+                rules_triggered=result.triggered,
+                messages=result.messages,
+                date=today,
+                timestamp=now_et.isoformat(),
+            )
+        except Exception:
+            pass
         raise ValueError(
             f"Trade blocked: {', '.join(result.triggered)}. {'; '.join(result.messages)}"
         )

@@ -8,10 +8,26 @@ const CONFIDENCE_STYLE = {
   low:    { background: '#3a1a1a', color: '#f85149' },
 }
 
-function SuggestionCard({ trade, isRecommended }) {
-  const [rhOpen, setRhOpen] = useState(false)
+function SuggestionCard({ trade, isRecommended, allowLoss }) {
+  const [rhOpen, setRhOpen]   = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [submitted, setSubmitted]   = useState(false)
+  const [submitErr, setSubmitErr]   = useState(null)
   const conf = CONFIDENCE_STYLE[trade.confidence] ?? CONFIDENCE_STYLE.low
   const pnlColor = (trade.current_unrealized_pnl ?? 0) >= 0 ? 'var(--green)' : 'var(--red)'
+
+  function paperTrade() {
+    setSubmitting(true)
+    setSubmitErr(null)
+    fetch(`${API}/paper-trades/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ setup: trade, allow_loss: allowLoss ?? false }),
+    })
+      .then(r => r.ok ? r.json() : r.json().then(e => Promise.reject(e.detail ?? r.statusText)))
+      .then(() => { setSubmitted(true); setSubmitting(false) })
+      .catch(e => { setSubmitErr(String(e)); setSubmitting(false) })
+  }
 
   return (
     <div style={{
@@ -74,6 +90,22 @@ function SuggestionCard({ trade, isRecommended }) {
       <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: 10 }}>
         {trade.rationale}
       </p>
+
+      {/* paper trade action */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <button onClick={paperTrade} disabled={submitting || submitted} style={{
+          fontSize: 11, padding: '4px 14px', borderRadius: 'var(--radius)',
+          border: '1px solid var(--border)', cursor: submitting || submitted ? 'default' : 'pointer',
+          background: submitted ? '#1a3a2a' : submitting ? 'var(--surface)' : '#1c2d3d',
+          color: submitted ? 'var(--green)' : submitting ? 'var(--text-muted)' : 'var(--blue)',
+          fontWeight: 600,
+        }}>
+          {submitted ? '✓ Paper Trade Logged' : submitting ? 'Submitting…' : 'Paper Trade'}
+        </button>
+        {submitErr && (
+          <span style={{ fontSize: 11, color: 'var(--red)' }}>{submitErr}</span>
+        )}
+      </div>
 
       {/* robinhood instructions */}
       <button onClick={() => setRhOpen(o => !o)} style={{
@@ -167,6 +199,7 @@ function SuggestTab() {
               key={trade.ticker + trade.direction}
               trade={trade}
               isRecommended={result.recommended?.ticker === trade.ticker && result.recommended?.direction === trade.direction}
+              allowLoss={allowLoss}
             />
           ))}
 

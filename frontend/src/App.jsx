@@ -5,6 +5,7 @@ import SentimentFeed from './components/SentimentFeed'
 import PortfolioView from './components/PortfolioView'
 import PaperTradingPanel from './components/PaperTradingPanel'
 import LiveTrackingPanel from './components/LiveTrackingPanel'
+import GuardrailsPanel from './components/GuardrailsPanel'
 
 export default function App() {
   return (
@@ -34,6 +35,10 @@ export default function App() {
 
       <div style={{ marginBottom: 16 }}>
         <LiveTrackingPanel />
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <GuardrailsPanel />
       </div>
 
       <PortfolioView />

@@ -41,6 +41,7 @@ class DailyContext:
     realized_pnl_today: float
     trade_count_today: int
     guardrail_status: dict
+    guardrail_events: list
     minutes_remaining: int
     trading_mode: str
     profit_mode: str
@@ -187,6 +188,11 @@ def load_context(
     )
     guardrail_status = get_status(ctx)
 
+    try:
+        guardrail_events = dynamo_service.get_guardrail_events_by_date(today)
+    except Exception:
+        guardrail_events = []
+
     return DailyContext(
         date=today,
         cash=cash,
@@ -198,6 +204,7 @@ def load_context(
         realized_pnl_today=realized_pnl_today,
         trade_count_today=trade_count_today,
         guardrail_status=guardrail_status,
+        guardrail_events=guardrail_events,
         minutes_remaining=_minutes_remaining(now_et),
         trading_mode=trading_mode,
         profit_mode=profit_mode,
