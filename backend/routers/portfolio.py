@@ -1,18 +1,18 @@
 from fastapi import APIRouter, HTTPException
 
-from services import finnhub_service, portfolio_factory
+from services import portfolio_factory, schwab_service
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
 
 def _enrich_positions(positions: list[dict]) -> list[dict]:
-    """Add current_price and unrealized_pnl to each position via Finnhub quotes."""
+    """Add current_price and unrealized_pnl to each position via Schwab quotes."""
     if not positions:
         return positions
 
     tickers = [p["ticker"] for p in positions if p.get("ticker")]
     try:
-        quotes = {q["ticker"]: q for q in finnhub_service.get_batch_quotes(tickers)}
+        quotes = {q["ticker"]: q for q in schwab_service.get_batch_quotes(tickers)}
     except Exception:
         quotes = {}
 

@@ -3,7 +3,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
-from services import dynamo_service, finnhub_service, market_data_service, portfolio_factory
+from services import dynamo_service, finnhub_service, market_data_service, portfolio_factory, schwab_service
 from services.guardrail_service import GuardrailContext, get_status
 
 ET = ZoneInfo("America/New_York")
@@ -67,7 +67,7 @@ def _enrich_positions(positions: list[dict]) -> list[dict]:
         return positions
     tickers = [p["ticker"] for p in positions if p.get("ticker")]
     try:
-        quotes = {q["ticker"]: q for q in finnhub_service.get_batch_quotes(tickers)}
+        quotes = {q["ticker"]: q for q in schwab_service.get_batch_quotes(tickers)}
     except Exception:
         quotes = {}
 
@@ -97,9 +97,18 @@ def _enrich_positions(positions: list[dict]) -> list[dict]:
 
 
 def _get_watchlist() -> list[str]:
+    # Explicit override via env var always wins
     raw = os.environ.get("WATCHLIST", "")
     if raw:
         return [t.strip().upper() for t in raw.split(",") if t.strip()]
+    # Dynamic: top movers across SPX, Nasdaq, Dow via Schwab
+    try:
+        dynamic = schwab_service.get_dynamic_watchlist()
+        if dynamic:
+            return dynamic
+    except Exception:
+        pass
+    # Static fallback if Schwab is unavailable
     return _DEFAULT_TICKERS
 
 

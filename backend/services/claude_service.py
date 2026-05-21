@@ -89,18 +89,44 @@ When generating trade suggestions:
 
 Never force a trade to hit the goal by taking disproportionate risk.
 
-Return ONLY a single valid JSON object with this exact top-level structure (no markdown, no explanation):
+Return ONLY a single valid JSON object with this exact structure (no markdown, no explanation).
+Every TradeSetup must include ALL fields below with EXACT field names:
+
 {{
   "goal": <float>,
   "profit_mode": <string>,
   "trade_scope": <string>,
-  "suggestions": [ <TradeSetup objects> ],
   "risk_note": <string>,
   "market_conditions": <string>,
   "intraday_viability": <string or null>,
-  "recommended": <TradeSetup or null>,
   "guardrails_checked": [],
-  "any_guardrail_triggered": false
+  "any_guardrail_triggered": false,
+  "recommended": <TradeSetup or null>,
+  "suggestions": [
+    {{
+      "ticker": <string>,
+      "direction": <"long" or "short">,
+      "trade_type": <"intraday_cash" or "swing" or "partial_trim">,
+      "profit_mode": <string>,
+      "entry_price": <float>,
+      "target_price": <float>,
+      "stop_loss": <float>,
+      "shares": <int>,
+      "expected_gain": <float>,
+      "max_loss": <float>,
+      "reward_risk_ratio": <float>,
+      "confidence": <"high" or "medium" or "low">,
+      "rationale": <string>,
+      "setup_type": <string>,
+      "uses_existing_holding": <bool>,
+      "cost_basis": <float or null>,
+      "current_unrealized_pnl": <float or null>,
+      "avg_daily_range_pct": <float or null>,
+      "robinhood_instructions": <string — exact plain english steps including 3:45pm alarm>,
+      "ml_probability": null,
+      "ml_calibration_note": null
+    }}
+  ]
 }}\
 """
 
@@ -115,10 +141,20 @@ def _get_client() -> anthropic.Anthropic:
 
 
 def _extract_json(text: str) -> str:
-    """Strip markdown code fences from Claude's response if present."""
+    """Strip markdown code fences from Claude's response if present.
+
+    Handles truncated responses where the closing fence was cut off by max_tokens.
+    """
     text = text.strip()
+    # Complete code fence — prefer this
     match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", text)
-    return match.group(1) if match else text
+    if match:
+        return match.group(1).strip()
+    # Opening fence only (truncated response) — strip the fence and return remainder
+    match = re.search(r"```(?:json)?\s*([\s\S]+)", text)
+    if match:
+        return match.group(1).strip()
+    return text
 
 
 def morning_briefing(ctx: DailyContext) -> str:
@@ -174,15 +210,20 @@ def suggest_trades(
     payload = {**ctx.to_dict(), "allow_loss": allow_loss, "user_message": user_message}
     response = _get_client().messages.create(
         model=_MODEL,
-        max_tokens=2048,
+        max_tokens=4096,
         system=system,
         messages=[{"role": "user", "content": json.dumps(payload, default=str)}],
     )
     raw = _extract_json(response.content[0].text)
+    if not raw:
+        raise ValueError(
+            f"Claude returned empty response. "
+            f"Stop reason: {response.stop_reason}. Usage: {response.usage}"
+        )
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as e:
-        raise ValueError(f"Claude returned invalid JSON: {e}")
+        raise ValueError(f"Claude returned invalid JSON: {e}\nRaw: {raw[:500]}")
 
     # Inject envelope fields in case Claude omitted them
     parsed.setdefault("goal", ctx.daily_goal)
