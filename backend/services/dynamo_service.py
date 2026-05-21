@@ -1,3 +1,4 @@
+import json
 import os
 import uuid
 from datetime import datetime
@@ -186,6 +187,30 @@ def log_guardrail_event(
         "rules_triggered": rules_triggered,
         "messages": messages,
     })
+
+
+# ── Cache (scanner / sentiment pre-compute) ───────────────────────────────────
+
+
+def put_cache(key: str, payload: list | dict) -> None:
+    """Store a named cache entry. Uses trade_id='cache#<key>' as the hash key."""
+    now = datetime.now(tz=ET)
+    _table().put_item(Item={
+        "trade_id": f"cache#{key}",
+        "status": "cache",
+        "date": now.strftime("%Y-%m-%d"),
+        "cached_at": now.isoformat(),
+        "payload": json.dumps(payload, default=str),
+    })
+
+
+def get_cache(key: str) -> tuple[list | dict | None, str | None]:
+    """Return (payload, cached_at_iso) or (None, None) if not found."""
+    resp = _table().get_item(Key={"trade_id": f"cache#{key}"})
+    item = resp.get("Item")
+    if not item:
+        return None, None
+    return json.loads(item["payload"]), item.get("cached_at")
 
 
 def get_guardrail_events_by_date(date: str) -> list[dict]:

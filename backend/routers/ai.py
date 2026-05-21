@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from models.schemas import TradeSuggestionResponse
-from services import claude_service
+from services import cache_service, claude_service
 from services.context_loader import load_context
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -34,6 +34,9 @@ def get_briefing():
 @router.get("/sentiment")
 def get_sentiment():
     try:
+        cached = cache_service.get_cached_sentiment()
+        if cached is not None:
+            return {"sentiment": cached}
         ctx = load_context()
         return {"sentiment": ctx.sentiment}
     except Exception as e:

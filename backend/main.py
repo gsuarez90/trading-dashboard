@@ -17,7 +17,7 @@ from routers import (
     scanner,
     sentiment,
 )
-from services import dynamo_service
+from services import cache_service, dynamo_service
 
 app = FastAPI(title="AI Trading Dashboard")
 
@@ -45,18 +45,18 @@ handler = Mangum(app)
 
 
 def price_monitor_handler(event, context):
-    """Every 5 min during market hours — checks open trades against Polygon prices."""
-    pass
+    """Every 5 min during market hours — auto-closes paper trades at target/stop."""
+    return cache_service.run_price_monitor()
 
 
 def end_of_day_handler(event, context):
-    """3:45pm ET — auto-closes paper trades, flags live trades for manual close."""
-    pass
+    """3:45pm ET — closes all open paper trades, flags live trades for manual close."""
+    return cache_service.run_end_of_day()
 
 
 def refresh_handler(event, context):
     """7am ET — scanner + sentiment → DynamoDB cache."""
-    pass
+    return cache_service.run_daily_refresh()
 
 
 def analytics_handler(event, context):
