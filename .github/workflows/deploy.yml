@@ -6,6 +6,8 @@ on:
     paths:
       - 'backend/**'
       - 'frontend/**'
+      - 'template.yaml'
+      - 'samconfig.toml'
 
 jobs:
   backend:
@@ -26,7 +28,7 @@ jobs:
           aws-region: us-east-1
 
       - name: Build and deploy Lambda functions
-        run: cd backend && sam build && sam deploy --no-confirm-changeset --no-fail-on-empty-changeset
+        run: sam build && sam deploy --no-confirm-changeset --no-fail-on-empty-changeset
 
   frontend-public:
     runs-on: ubuntu-latest
@@ -40,6 +42,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -47,7 +51,7 @@ jobs:
           aws-region: us-east-1
 
       - name: Build public frontend
-        run: cd frontend && npm install && npm run build
+        run: cd frontend && npm ci && npm run build
         env:
           VITE_API_URL: ${{ secrets.PUBLIC_API_URL }}
           VITE_PORTFOLIO_MODE: synthetic
@@ -73,6 +77,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -80,7 +86,7 @@ jobs:
           aws-region: us-east-1
 
       - name: Build private frontend
-        run: cd frontend && npm install && npm run build
+        run: cd frontend && npm ci && npm run build
         env:
           VITE_API_URL: ${{ secrets.PRIVATE_API_URL }}
           VITE_PORTFOLIO_MODE: live

@@ -19,7 +19,7 @@ jobs:
         run: pip install black isort
 
       - name: Check formatting (black)
-        run: black --check backend/
+        run: black --check --line-length=100 backend/
 
       - name: Check import order (isort)
         run: isort --check-only backend/

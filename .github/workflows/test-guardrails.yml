@@ -16,7 +16,8 @@ jobs:
           python-version: '3.13'
 
       - name: Install dependencies
-        run: pip install -r backend/requirements.txt
+        run: pip install -r backend/requirements.txt pytest moto
 
       - name: Run guardrail tests
-        run: pytest backend/tests/test_guardrails.py -v --tb=short
+        working-directory: backend
+        run: pytest tests/test_guardrails.py -v --tb=short
