@@ -1,27 +1,47 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 const API = import.meta.env.VITE_API_URL || '/api'
+const POLL_INTERVAL = 90_000
 
 export default function PortfolioView() {
   const [portfolio, setPortfolio] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setLoading(true)
+    setError(null)
     fetch(`${API}/portfolio/`)
       .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
       .then(data => { setPortfolio(data); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })
   }, [])
 
+  useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.visibilityState === 'visible') load()
+    }, POLL_INTERVAL)
+    return () => clearInterval(id)
+  }, [load])
+
   const positions = portfolio?.positions || []
 
   return (
     <div className="panel">
-      <h2>Portfolio</h2>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <h2 style={{ margin: 0 }}>Portfolio</h2>
+        <button onClick={load} disabled={loading} style={{
+          background: 'none', border: '1px solid var(--border)', borderRadius: 'var(--radius)',
+          color: loading ? 'var(--text-muted)' : 'var(--text)', padding: '3px 10px',
+          fontSize: 11, cursor: loading ? 'default' : 'pointer',
+        }}>
+          {loading ? 'Loading…' : 'Refresh'}
+        </button>
+      </div>
 
-      {loading && <p className="status">Loading…</p>}
-      {error   && <p className="error">Error: {error}</p>}
+      {error && <p className="error">Error: {error}</p>}
 
       {portfolio && (
         <>
