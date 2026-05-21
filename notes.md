@@ -209,3 +209,28 @@ import { add } from './math.js'
 **Why it matters for Vite:** During development, Vite serves source files as-is directly to the browser using native ESM — the browser itself handles the imports. This is why Vite starts nearly instantly regardless of project size, while older tools like Webpack had to bundle everything into one big file before you could load the page at all. For production, Vite still bundles (via Rollup) for optimized S3 deployment.
 
 **Practical takeaway:** React components use ESM automatically via `import`/`export`. It's the reason Vite is fast — no upfront bundling in dev.
+
+---
+
+## Running PowerShell Scripts
+
+PowerShell won't execute scripts in the current directory by name alone — you must prefix with `.\` to tell it to look locally:
+
+```powershell
+.\scripts\start.ps1   # from repo root
+.\start.ps1           # if already inside scripts\
+```
+
+Without `.\`, PowerShell looks for a system command named `start` and ignores `.ps1` files in the working directory. This is a security default, not a bug.
+
+---
+
+## chmod +x and the Shebang Line
+
+`chmod +x script.sh` sets the Unix executable permission bit on a file — a one-time operation. After that you can run the script directly (`./script.sh`) instead of passing it explicitly to the interpreter (`bash script.sh`).
+
+The **shebang** (`#!/usr/bin/env bash` on line 1) is what makes direct execution work — when you run the file, the OS reads that first line and knows which interpreter to use. Without it, the OS wouldn't know what to do with the file.
+
+The `./` prefix is still required because the shell won't search the current directory for executables by default (same reason as `.\` in PowerShell).
+
+On Windows/Git Bash, `chmod +x` works within the Git Bash layer but the executable bit doesn't carry over to PowerShell or Windows Explorer — so `bash scripts/start.sh` is the more portable option on Windows.
