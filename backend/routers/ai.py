@@ -20,6 +20,18 @@ class SuggestTradesRequest(BaseModel):
 @router.get("/briefing")
 def get_briefing():
     try:
+        # Serve cached briefing text — minutes_remaining is always computed live
+        cached = cache_service.get_cached_briefing()
+        if cached:
+            from services.context_loader import _minutes_remaining
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            mins = _minutes_remaining(datetime.now(tz=ZoneInfo("America/New_York")))
+            return {
+                "briefing": cached["briefing"],
+                "date": cached["date"],
+                "minutes_remaining": mins,
+            }
         ctx = load_context()
         briefing = claude_service.morning_briefing(ctx)
         return {

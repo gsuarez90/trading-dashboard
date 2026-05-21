@@ -10,9 +10,9 @@ Three scheduled jobs:
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from services import dynamo_service, finnhub_service, schwab_service
+from services import claude_service, dynamo_service, finnhub_service, schwab_service
 from services import paper_trading_service
-from services.context_loader import _get_watchlist
+from services.context_loader import _get_watchlist, load_context
 
 ET = ZoneInfo("America/New_York")
 
@@ -47,6 +47,14 @@ def get_cached_sentiment() -> list[dict] | None:
     return None
 
 
+def get_cached_briefing() -> dict | None:
+    """Return cached briefing payload {briefing, date} if fresh, else None."""
+    data, cached_at = dynamo_service.get_cache("briefing")
+    if data is not None and _cache_is_fresh(cached_at):
+        return data
+    return None
+
+
 # ── Lambda handlers ───────────────────────────────────────────────────────────
 
 def run_daily_refresh() -> dict:
@@ -73,10 +81,21 @@ def run_daily_refresh() -> dict:
         errors.append(f"sentiment: {e}")
         sentiment_count = 0
 
+    # Morning briefing — generated once, cached for the day
+    try:
+        ctx = load_context()
+        briefing_text = claude_service.morning_briefing(ctx)
+        dynamo_service.put_cache("briefing", {"briefing": briefing_text, "date": ctx.date})
+        briefing_ok = True
+    except Exception as e:
+        errors.append(f"briefing: {e}")
+        briefing_ok = False
+
     return {
         "refreshed_at": datetime.now(tz=ET).isoformat(),
         "scanner_count": scanner_count,
         "sentiment_count": sentiment_count,
+        "briefing_cached": briefing_ok,
         "errors": errors,
     }
 
