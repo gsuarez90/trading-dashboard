@@ -6,11 +6,13 @@ Local dev:  reads token from schwab_token.json (written by scripts/schwab_auth.p
 Lambda:     reads/writes token via Secrets Manager (wired up at Step 21)
 """
 
+import json
 import os
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import boto3
 import schwab
 
 ET = ZoneInfo("America/New_York")
@@ -29,6 +31,26 @@ def _get_client():
     api_key = os.environ["SCHWAB_CLIENT_ID"]
     app_secret = os.environ["SCHWAB_CLIENT_SECRET"]
 
+    # Lambda: token stored in Secrets Manager
+    secret_arn = os.environ.get("SCHWAB_TOKEN_SECRET_ARN")
+    if secret_arn:
+        sm = boto3.client("secretsmanager")
+
+        def _read():
+            return json.loads(sm.get_secret_value(SecretId=secret_arn)["SecretString"])
+
+        def _write(token):
+            sm.put_secret_value(SecretId=secret_arn, SecretString=json.dumps(token))
+
+        _client = schwab.auth.client_from_access_functions(
+            api_key=api_key,
+            app_secret=app_secret,
+            token_read_func=_read,
+            token_write_func=_write,
+        )
+        return _client
+
+    # Local dev: token file written by scripts/schwab_auth.py
     token_path = os.environ.get("SCHWAB_TOKEN_PATH", "schwab_token.json")
     resolved = Path(token_path)
     if not resolved.is_absolute():

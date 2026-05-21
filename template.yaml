@@ -1,0 +1,298 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: AI Trading Dashboard — Lambda functions, DynamoDB, S3, CloudFront
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+    Runtime: python3.13
+    CodeUri: backend/
+    Environment:
+      Variables:
+        # Non-secret config — SSM plain parameters
+        PORTFOLIO_MODE:       !Sub '{{resolve:ssm:/trading-app/portfolio-mode}}'
+        TRADING_MODE:         !Sub '{{resolve:ssm:/trading-app/trading-mode}}'
+        PROFIT_MODE:          !Sub '{{resolve:ssm:/trading-app/profit-mode}}'
+        TRADE_SCOPE:          !Sub '{{resolve:ssm:/trading-app/trade-scope}}'
+        DAILY_GOAL:           !Sub '{{resolve:ssm:/trading-app/daily-goal}}'
+        DAILY_LOSS_LIMIT:     !Sub '{{resolve:ssm:/trading-app/daily-loss-limit}}'
+        DAILY_TRADE_LIMIT:    !Sub '{{resolve:ssm:/trading-app/daily-trade-limit}}'
+        MAX_POSITION_SIZE_PCT: !Sub '{{resolve:ssm:/trading-app/max-position-size-pct}}'
+        # API keys — SSM SecureString
+        ANTHROPIC_API_KEY:    !Sub '{{resolve:ssm-secure:/trading-app/anthropic-key}}'
+        FINNHUB_API_KEY:      !Sub '{{resolve:ssm-secure:/trading-app/finnhub-key}}'
+        SCHWAB_CLIENT_ID:     !Sub '{{resolve:ssm-secure:/trading-app/schwab-client-id}}'
+        SCHWAB_CLIENT_SECRET: !Sub '{{resolve:ssm-secure:/trading-app/schwab-client-secret}}'
+        # Infrastructure
+        DYNAMO_TABLE_NAME:       trading-dashboard
+        S3_CHARTS_BUCKET:        trading-dashboard-charts
+        SCHWAB_TOKEN_SECRET_ARN: !Ref SchwabTokenSecret
+
+Parameters:
+  Stage:
+    Type: String
+    Default: prod
+    AllowedValues: [prod, staging]
+
+Resources:
+
+  # ── DynamoDB ─────────────────────────────────────────────────────────────────
+
+  TradingTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: trading-dashboard
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: trade_id
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+        - AttributeName: date
+          AttributeType: S
+      KeySchema:
+        - AttributeName: trade_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: status-date-index
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+            - AttributeName: date
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  # ── Secrets Manager ───────────────────────────────────────────────────────────
+
+  RobinhoodCredentials:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: /trading-app/robinhood-credentials
+      Description: Robinhood username and password (private Lambda only)
+      SecretString: '{"username": "placeholder", "password": "placeholder"}'
+      # After deploy, set real values via CLI — never store in code:
+      # aws secretsmanager put-secret-value \
+      #   --secret-id /trading-app/robinhood-credentials \
+      #   --secret-string '{"username": "real", "password": "real"}'
+
+  SchwabTokenSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: /trading-app/schwab-token
+      Description: Schwab OAuth token JSON (written by schwab_auth.py, rotated automatically)
+      SecretString: '{}'
+      # After deploy, seed the real token:
+      # aws secretsmanager put-secret-value \
+      #   --secret-id /trading-app/schwab-token \
+      #   --secret-string "$(cat backend/schwab_token.json)"
+
+  # ── IAM shared policies ────────────────────────────────────────────────────────
+
+  DynamoPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:PutItem
+              - dynamodb:UpdateItem
+              - dynamodb:DeleteItem
+              - dynamodb:Query
+              - dynamodb:Scan
+            Resource:
+              - !GetAtt TradingTable.Arn
+              - !Sub '${TradingTable.Arn}/index/*'
+
+  SecretsPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+              - secretsmanager:PutSecretValue
+            Resource:
+              - !Ref SchwabTokenSecret
+              - !Ref RobinhoodCredentials
+
+  # ── Lambda functions ──────────────────────────────────────────────────────────
+
+  # Main API — handles all HTTP requests from CloudFront / API Gateway
+  TradingDashboardFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: main.handler
+      ReservedConcurrentExecutions: 5
+      Policies:
+        - !Ref DynamoPolicy
+        - !Ref SecretsPolicy
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+
+  # Price monitor — every 5 min during market hours (9:30am–4pm ET = 13:30–21:00 UTC)
+  PriceMonitorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: main.price_monitor_handler
+      ReservedConcurrentExecutions: 2
+      Policies:
+        - !Ref DynamoPolicy
+        - !Ref SecretsPolicy
+      Events:
+        MarketHours:
+          Type: Schedule
+          Properties:
+            Schedule: cron(*/5 13-20 ? * MON-FRI *)
+
+  # End of day — 3:45pm ET (20:45 UTC)
+  EndOfDayFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: main.end_of_day_handler
+      ReservedConcurrentExecutions: 1
+      Policies:
+        - !Ref DynamoPolicy
+        - !Ref SecretsPolicy
+      Events:
+        EOD:
+          Type: Schedule
+          Properties:
+            Schedule: cron(45 20 ? * MON-FRI *)
+
+  # Daily 7am ET refresh — scanner + sentiment + briefing → DynamoDB cache (12:00 UTC)
+  DailyRefreshFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: main.refresh_handler
+      Timeout: 120
+      Policies:
+        - !Ref DynamoPolicy
+        - !Ref SecretsPolicy
+      Events:
+        DailyTrigger:
+          Type: Schedule
+          Properties:
+            Schedule: cron(0 12 * * ? *)
+
+  # Nightly analytics — Phase 2 (stub, not active)
+  AnalyticsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: main.analytics_handler
+      Timeout: 300
+      MemorySize: 1024
+      Policies:
+        - !Ref DynamoPolicy
+      Events:
+        NightlyAnalytics:
+          Type: Schedule
+          Properties:
+            Schedule: cron(0 22 * * ? *)
+
+  # ── S3 buckets ────────────────────────────────────────────────────────────────
+
+  PublicFrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: trading-dashboard-public
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+
+  PrivateFrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: trading-dashboard-private
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+
+  ChartsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: trading-dashboard-charts
+
+  PublicFrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref PublicFrontendBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub '${PublicFrontendBucket.Arn}/*'
+
+  # ── CloudFront distributions ──────────────────────────────────────────────────
+
+  PublicDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Origins:
+          - Id: PublicS3Origin
+            DomainName: !GetAtt PublicFrontendBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          ViewerProtocolPolicy: redirect-to-https
+          TargetOriginId: PublicS3Origin
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+          AllowedMethods: [GET, HEAD]
+        CustomErrorResponses:
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+
+  PrivateDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Origins:
+          - Id: PrivateS3Origin
+            DomainName: !GetAtt PrivateFrontendBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          ViewerProtocolPolicy: redirect-to-https
+          TargetOriginId: PrivateS3Origin
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          AllowedMethods: [GET, HEAD]
+        CustomErrorResponses:
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint URL
+    Value: !Sub 'https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com'
+  PublicCloudfrontUrl:
+    Description: Public CloudFront distribution URL
+    Value: !Sub 'https://${PublicDistribution.DomainName}'
+  PrivateCloudfrontUrl:
+    Description: Private CloudFront distribution URL
+    Value: !Sub 'https://${PrivateDistribution.DomainName}'
+  DynamoTableName:
+    Description: DynamoDB table name
+    Value: !Ref TradingTable

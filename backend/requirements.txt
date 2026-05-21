@@ -2,7 +2,6 @@ fastapi
 mangum
 boto3
 anthropic
-yfinance
 finnhub-python
 robin-stocks
 schwab-py
