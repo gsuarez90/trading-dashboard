@@ -3,6 +3,7 @@ import ChatPanel from './components/ChatPanel'
 import ScannerPanel from './components/ScannerPanel'
 import SentimentFeed from './components/SentimentFeed'
 import PortfolioView from './components/PortfolioView'
+import PaperTradingPanel from './components/PaperTradingPanel'
 
 export default function App() {
   return (
@@ -24,6 +25,10 @@ export default function App() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
         <ScannerPanel />
         <SentimentFeed />
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <PaperTradingPanel />
       </div>
 
       <PortfolioView />

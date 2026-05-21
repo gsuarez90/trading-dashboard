@@ -3,13 +3,54 @@ from decimal import Decimal
 
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
+from botocore.exceptions import ClientError
 
 from models.schemas import PaperTrade
 
 
+def _resource():
+    kwargs = {"region_name": os.environ.get("AWS_REGION", "us-east-1")}
+    endpoint = os.environ.get("DYNAMO_ENDPOINT_URL")
+    if endpoint:
+        kwargs["endpoint_url"] = endpoint
+    return boto3.resource("dynamodb", **kwargs)
+
+
 def _table():
-    dynamodb = boto3.resource("dynamodb", region_name=os.environ.get("AWS_REGION", "us-east-1"))
-    return dynamodb.Table(os.environ["DYNAMO_TABLE_NAME"])
+    return _resource().Table(os.environ["DYNAMO_TABLE_NAME"])
+
+
+def ensure_table_exists() -> None:
+    """Create the DynamoDB table and GSI if they don't exist. Safe to call repeatedly."""
+    name = os.environ["DYNAMO_TABLE_NAME"]
+    db = _resource()
+    try:
+        db.Table(name).load()
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ResourceNotFoundException":
+            raise
+        db.create_table(
+            TableName=name,
+            AttributeDefinitions=[
+                {"AttributeName": "trade_id", "AttributeType": "S"},
+                {"AttributeName": "status",   "AttributeType": "S"},
+                {"AttributeName": "date",     "AttributeType": "S"},
+            ],
+            KeySchema=[{"AttributeName": "trade_id", "KeyType": "HASH"}],
+            GlobalSecondaryIndexes=[
+                {
+                    "IndexName": "status-date-index",
+                    "KeySchema": [
+                        {"AttributeName": "status", "KeyType": "HASH"},
+                        {"AttributeName": "date",   "KeyType": "RANGE"},
+                    ],
+                    "Projection": {"ProjectionType": "ALL"},
+                    "ProvisionedThroughput": {"ReadCapacityUnits": 5, "WriteCapacityUnits": 5},
+                }
+            ],
+            ProvisionedThroughput={"ReadCapacityUnits": 5, "WriteCapacityUnits": 5},
+        )
+        db.Table(name).wait_until_exists()
 
 
 def _to_item(trade: PaperTrade) -> dict:

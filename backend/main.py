@@ -17,8 +17,15 @@ from routers import (
     scanner,
     sentiment,
 )
+from services import dynamo_service
 
 app = FastAPI(title="AI Trading Dashboard")
+
+try:
+    dynamo_service.ensure_table_exists()
+except Exception:
+    pass  # non-fatal in Lambda cold start if table already exists
+
 app.include_router(scanner.router)
 app.include_router(portfolio.router)
 app.include_router(market.router)
