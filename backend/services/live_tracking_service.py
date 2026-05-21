@@ -140,5 +140,5 @@ def get_live_summary(today: str) -> DailyCashSummary:
         goal_hit=goal_hit,
         goal_hit_time=goal_hit_time,
         settlement_note="Live trades settle T+2",
-        trading_mode="live",
+        trading_mode=os.environ.get("TRADING_MODE", "paper"),
     )

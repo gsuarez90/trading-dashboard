@@ -4,6 +4,7 @@ import ScannerPanel from './components/ScannerPanel'
 import SentimentFeed from './components/SentimentFeed'
 import PortfolioView from './components/PortfolioView'
 import PaperTradingPanel from './components/PaperTradingPanel'
+import LiveTrackingPanel from './components/LiveTrackingPanel'
 
 export default function App() {
   return (
@@ -29,6 +30,10 @@ export default function App() {
 
       <div style={{ marginBottom: 16 }}>
         <PaperTradingPanel />
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <LiveTrackingPanel />
       </div>
 
       <PortfolioView />
