@@ -234,3 +234,46 @@ The **shebang** (`#!/usr/bin/env bash` on line 1) is what makes direct execution
 The `./` prefix is still required because the shell won't search the current directory for executables by default (same reason as `.\` in PowerShell).
 
 On Windows/Git Bash, `chmod +x` works within the Git Bash layer but the executable bit doesn't carry over to PowerShell or Windows Explorer — so `bash scripts/start.sh` is the more portable option on Windows.
+
+---
+
+## AWS SAM (Serverless Application Model)
+
+SAM stands for **Serverless Application Model** — AWS's framework for defining and deploying serverless infrastructure using a simplified YAML template. You describe Lambda functions, API Gateway routes, DynamoDB tables, S3 buckets, etc. in `template.yaml`, and SAM compiles it down to CloudFormation and deploys it. It's the IaC tool for this project.
+
+---
+
+## Activating the Python Virtual Environment
+
+**PowerShell:**
+```powershell
+backend\.venv\Scripts\Activate.ps1
+```
+
+**Git Bash:**
+```bash
+source backend/.venv/Scripts/activate
+```
+
+After activation, `(.venv)` appears in the prompt. The venv must be active to use packages installed in it (like `schwab-py`, `uvicorn`, etc.). The `start.ps1` / `start.sh` scripts handle this automatically.
+
+## Finnhub VADER Sentiment Scores
+
+Sentiment is scored using VADER (Valence Aware Dictionary and sEntiment Reasoner), a rule-based NLP model. For each ticker, Finnhub news headlines and summaries from the past 3 days are fetched and each article is scored from -1.0 to +1.0. All article scores are averaged into a single compound score.
+
+| Score | Label |
+|-------|-------|
+| ≥ +0.05 | bullish |
+| ≤ -0.05 | bearish |
+| between | neutral |
+
+The thresholds are intentionally tight — VADER tends to read financial headlines as weakly positive even on neutral days. `article_count` indicates data reliability: a score of +0.80 on 1 article is far less reliable than +0.20 on 12 articles.
+
+## SentimentFeed — Dynamic Watchlist Fix
+
+`SentimentFeed.jsx` originally had a hardcoded 14-ticker list and called `/sentiment/batch/scores` directly, bypassing the Schwab movers API entirely. Fixed in two parts:
+
+1. Added `GET /api/ai/sentiment` endpoint in `routers/ai.py` — calls `load_context()` (which uses the Schwab dynamic watchlist) and returns just the `sentiment` array, with no Claude call, so it's fast.
+2. Updated `SentimentFeed.jsx` to fetch from `/api/ai/sentiment` instead of the hardcoded call.
+
+The Sentiment card now shows live movers (up to 18 tickers from SPX/Nasdaq/Dow via Schwab) plus any tickers currently held in the portfolio.

@@ -2,8 +2,6 @@ import { useEffect, useState } from 'react'
 
 const API = import.meta.env.VITE_API_URL || '/api'
 
-const TICKERS = 'AAPL,MSFT,NVDA,AMZN,GOOGL,META,TSLA,SPY,QQQ,AMD,NFLX,ORCL,CRM,PLTR'
-
 function labelClass(label) {
   if (label === 'bullish') return 'up'
   if (label === 'bearish') return 'down'
@@ -16,9 +14,9 @@ export default function SentimentFeed() {
   const [error, setError] = useState(null)
 
   useEffect(() => {
-    fetch(`${API}/sentiment/batch/scores?tickers=${TICKERS}`)
+    fetch(`${API}/ai/sentiment`)
       .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
-      .then(data => { setRows(data); setLoading(false) })
+      .then(data => { setRows(data.sentiment || []); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })
   }, [])
 

@@ -34,7 +34,12 @@ uvicorn main:app --reload --port 8000 &
 BACKEND_PID=$!
 echo "Backend PID: $BACKEND_PID"
 
-sleep 2
+# Wait for backend to be ready
+echo "Waiting for backend..."
+until curl -s http://localhost:8000/health > /dev/null 2>&1; do
+    sleep 1
+done
+echo "Backend ready."
 
 # Start frontend (blocks until Ctrl+C)
 echo "Starting frontend (vite :5173)..."

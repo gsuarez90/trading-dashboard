@@ -31,6 +31,15 @@ def get_briefing():
         raise HTTPException(status_code=502, detail=f"Briefing failed: {e}")
 
 
+@router.get("/sentiment")
+def get_sentiment():
+    try:
+        ctx = load_context()
+        return {"sentiment": ctx.sentiment}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Sentiment failed: {e}")
+
+
 @router.post("/chat")
 def chat(request: ChatRequest):
     try:
