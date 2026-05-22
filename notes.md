@@ -642,3 +642,41 @@ aws cloudformation create-change-set \
 5. Verify changeset shows `Status: CREATE_COMPLETE` and exactly one change: `Action: Import, LogicalId: TradingTable`
 6. Execute: `aws cloudformation execute-change-set --stack-name trading-dashboard --change-set-name import-trading-table`
 7. Stack status becomes `IMPORT_COMPLETE`
+
+## Polling a Secrets Manager Secret
+
+To retrieve and verify a secret that was just seeded into AWS Secrets Manager, run:
+
+```bash
+aws secretsmanager get-secret-value --secret-id /trading-app/robinhood-credentials --region us-east-1
+```
+
+This returns the full secret including `SecretString` in plaintext, confirming the value round-tripped correctly. Use this any time you want to verify what's actually stored in a secret without going to the console.
+
+## Checking a Secret Without Revealing the Value
+
+To confirm a secret exists and see its metadata (ARN, version, rotation status) without exposing the actual value:
+
+```bash
+aws secretsmanager describe-secret --secret-id /trading-app/robinhood-credentials --region us-east-1
+```
+
+No `SecretString` is returned — the value stays encrypted. Use this when you want to verify the secret is there without decrypting it.
+
+## Clearing the Terminal Window
+
+- **Command Prompt:** `cls`
+- **PowerShell:** `cls` or `Clear-Host`
+- **Git Bash / Linux / Mac:** `clear`
+
+## Git Bash Path Conversion Gotcha with AWS CLI
+
+Git Bash on Windows converts arguments that start with `/` into Windows file paths (e.g. `/trading-app/schwab-token` becomes `C:/Program Files/Git/trading-app/schwab-token`). This breaks AWS CLI commands that use SSM or Secrets Manager paths as arguments.
+
+**Fix:** Prefix the command with `MSYS_NO_PATHCONV=1` to disable path conversion:
+
+```bash
+MSYS_NO_PATHCONV=1 aws secretsmanager put-secret-value --secret-id /trading-app/schwab-token --secret-string "$(cat backend/schwab_token.json)" --region us-east-1
+```
+
+The `//` workaround does NOT work for AWS — it sends the double slash literally to the API, which then can't find the secret. Always use `MSYS_NO_PATHCONV=1` instead.
