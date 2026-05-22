@@ -306,12 +306,19 @@ This creates Lambda functions, DynamoDB, S3 buckets, CloudFront distributions, S
 sam deploy --parameter-overrides CreateOIDCProvider=false
 ```
 
-**Step 4 — Seed the Schwab OAuth token into Secrets Manager**
+**Step 4 — Seed secrets into Secrets Manager**
+
+Robinhood credentials (username + password JSON):
 ```bash
-aws secretsmanager put-secret-value \
-  --secret-id /trading-app/schwab-token \
-  --secret-string "$(cat backend/schwab_token.json)"
+aws secretsmanager put-secret-value --secret-id /trading-app/robinhood-credentials --secret-string "{\"username\": \"your@email.com\", \"password\": \"yourpassword\"}" --region us-east-1
 ```
+
+Schwab OAuth token (from local token file):
+```bash
+aws secretsmanager put-secret-value --secret-id /trading-app/schwab-token --secret-string "$(cat backend/schwab_token.json)" --region us-east-1
+```
+
+Both secrets are created by SAM with placeholder values — this step fills them with real values. Never stored in code or git.
 
 **Step 5 — Add GitHub repository secrets** (Settings → Secrets → Actions)
 
@@ -527,3 +534,111 @@ Bash uses single-letter flags inside `[ ... ]` to test conditions. The most comm
 ```
 
 Example from `scripts/start.sh`: `if [ -z "$VIRTUAL_ENV" ]` checks whether a venv is already active (the venv sets `$VIRTUAL_ENV` when sourced). `if [ -f "$VENV" ]` checks the activate script file exists before trying to source it. The syntax is bash-specific — most languages would use string equality or a file existence method instead.
+
+## Verifying AWS CLI Credentials
+
+Run `aws sts get-caller-identity` to confirm credentials are active. A successful response returns your account ID, user ID, and ARN:
+
+```json
+{
+    "UserId": "AIDAXXXXXXXXXXXXXXXXX",
+    "Account": "123456789012",
+    "Arn": "arn:aws:iam::123456789012:user/your-username"
+}
+```
+
+## Switching TRADING_MODE from Paper to Live
+
+The `TRADING_MODE` SSM parameter accepts exactly two values: `"paper"` and `"live"`. To flip the app to live, run:
+
+```
+aws ssm put-parameter --name "/trading-app/trading-mode" --value "live" --type "String" --region us-east-1 --overwrite
+```
+
+Lambda reads SSM at cold start, so the new value takes effect on the next cold start — no redeploy needed. The `--overwrite` flag is what makes the update work without error. The 14 guardrail tests in `test_guardrails.py` must all pass before making this change.
+
+If credentials are not configured you'll get `Unable to locate credentials` — fix with `aws configure` (enter Access Key ID, Secret Access Key, region `us-east-1`, output format `json`).
+
+## Verifying SSM SecureString Encryption
+
+To confirm a parameter was stored as encrypted SecureString (without revealing the value):
+
+```
+aws ssm get-parameter --name "/trading-app/anthropic-key" --region us-east-1
+```
+
+Response will show `"Type": "SecureString"` and a masked `Value` — confirming it's encrypted at rest. To verify the actual value round-tripped correctly, add `--with-decryption`:
+
+```
+aws ssm get-parameter --name "/trading-app/anthropic-key" --with-decryption --region us-east-1
+```
+
+This decrypts and returns plaintext so you can confirm it matches what was stored.
+
+## Seeding Schwab Token — Run from Git Bash at Repo Root
+
+The Step 4 command `$(cat backend/schwab_token.json)` is bash command substitution — it reads the local token file and inlines its contents as the `--secret-string` value. It requires two things: (1) running from the repo root so the relative path resolves, and (2) `backend/schwab_token.json` already exists locally from a completed Schwab OAuth handshake.
+
+On Windows, run this from Git Bash (not cmd or PowerShell) since `$(cat ...)` is bash syntax. If the token file doesn't exist yet, this step can wait until after the Schwab OAuth flow is completed locally.
+
+## How SAM Resolves SSM Parameters at Deploy Time
+
+SSM Parameter Store is account-wide — all parameters live in one shared store regardless of which stack created them. When CloudFormation deploys, it reads `!Sub '{{resolve:ssm-secure:/trading-app/...}}'` references in `template.yaml` and fetches matching parameters by name from that store automatically. No extra linking is needed — as long as the parameters exist in the same AWS account and region, CloudFormation finds them. The `/trading-app/` prefix is just a naming convention to keep parameters organized; multiple stacks in the same account can use different prefixes and coexist without conflict.
+
+## SSM Parameter Names vs Environment Variable Names
+
+SSM parameters use lowercase with hyphens (e.g. `/trading-app/anthropic-key`). The app code reads uppercase env vars (e.g. `ANTHROPIC_API_KEY`). These are two different naming conventions for two different systems — the mapping between them is defined in `template.yaml` via `!Sub '{{resolve:ssm-secure:/trading-app/anthropic-key}}'`. Lambda resolves the SSM value at deploy time and injects it as the uppercase env var. To trace any env var back to its SSM path, read `template.yaml`.
+
+---
+
+## CloudFormation Resource Import — "cannot modify or add [Outputs]" (Step 25)
+
+Importing an existing DynamoDB table into a SAM-managed CloudFormation stack is painful. Here is exactly what went wrong and how it was fixed.
+
+### The goal
+The `trading-dashboard` DynamoDB table existed outside CloudFormation management. We wanted to import it so future `sam deploy` runs would manage it. The table had `DeletionPolicy: Retain` defined in `template.yaml`, so CF would never delete it — but it still needed to be imported to avoid CF trying to create a duplicate.
+
+### Problem 1 — Missing GSI and PITR
+Before attempting the import, running `aws dynamodb describe-table` revealed the actual table was missing the `status-date-index` GSI entirely, and PITR was not enabled — even though both were defined in `template.yaml`. The `ItemCount` field in describe-table output showed `0` even though the table had real data; that field is a cached approximate updated every ~6 hours. Always use `aws dynamodb scan --select COUNT` for a live count.
+
+**Fix:** Add the GSI manually via the DynamoDB console (Indexes tab → Create index: partition key `status` String, sort key `date` String, projection ALL). Enable PITR via the Backups tab. Wait for the GSI to reach Active status before attempting the import.
+
+### Problem 2 — "cannot modify or add [Outputs]" error on every changeset
+This error appeared every time we tried to create the import changeset, even when the template appeared identical to the deployed one.
+
+**Root cause:** CloudFormation compares the submitted template body against what it has stored using a near-raw string comparison for the Outputs section (not a semantic YAML parse). The deployed template had been stored with a mix of:
+- Literal `—` escape sequences (6 ASCII characters: backslash, u, 2, 0, 1, 4) for em dashes in some Output descriptions
+- Actual `—` em dash characters in others
+- YAML `\` line continuations at the end of long description strings (e.g. `"...PRIVATE_API_URL\` + newline + `      \ GitHub secrets"`)
+
+Any tool that regenerates or rewrites the YAML (including the Claude Code Write tool, the AWS CLI with `--output json`, and Python's json module) will normalize these to actual Unicode characters and single-line strings — which produces a template that is semantically identical but byte-for-byte different. CF sees the Outputs as modified and rejects the import.
+
+**Fix:** Open the CloudFormation console → Stacks → `trading-dashboard` → Template tab → view the unprocessed (original) template. Manually copy-paste the entire `Outputs:` section from the console directly into your local `import-template.yaml`. Do not let any tool reformat it. This is the only reliable way to get byte-exact output matching.
+
+**How we confirmed it was the Outputs:** We eliminated other causes by checking that resource counts, parameter counts, and condition counts all matched. The AWS CLI's `--output json` was showing `?` where em dashes should be, which was a display encoding artifact — the actual stored template still had the correct characters.
+
+### Problem 3 — "Requires capabilities: [CAPABILITY_NAMED_IAM]"
+After fixing the Outputs, a new error appeared. The template includes `RoleName: trading-dashboard-github-deploy` (an explicitly named IAM role), which requires CloudFormation acknowledgment.
+
+**Fix:** Add `CAPABILITY_NAMED_IAM` to the `--capabilities` flag in the create-change-set command. The full set of capabilities needed:
+
+```bash
+aws cloudformation create-change-set \
+  --stack-name trading-dashboard \
+  --change-set-name import-trading-table \
+  --change-set-type IMPORT \
+  --resources-to-import '[{"ResourceType":"AWS::DynamoDB::Table","LogicalResourceId":"TradingTable","ResourceIdentifier":{"TableName":"trading-dashboard"}}]' \
+  --template-body file://import-template.yaml \
+  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND
+```
+
+`CAPABILITY_AUTO_EXPAND` is needed because the template has `Transform: AWS::Serverless-2016-10-31` (SAM). `CAPABILITY_IAM` covers generic IAM resources. `CAPABILITY_NAMED_IAM` covers explicitly named IAM resources. SAM's `sam deploy` adds all of these automatically — for manual changeset commands you must pass them yourself.
+
+### Final sequence that worked
+1. Add GSI via DynamoDB console, enable PITR, wait for GSI Active
+2. Prepare `import-template.yaml` — start from the template downloaded with `aws cloudformation get-template --output text`, add the `TradingTable` resource block at the top of `Resources:`
+3. Copy-paste the `Outputs:` section verbatim from the CloudFormation console (unprocessed template view) — do not retype or reformat
+4. Run create-change-set with all three CAPABILITY flags
+5. Verify changeset shows `Status: CREATE_COMPLETE` and exactly one change: `Action: Import, LogicalId: TradingTable`
+6. Execute: `aws cloudformation execute-change-set --stack-name trading-dashboard --change-set-name import-trading-table`
+7. Stack status becomes `IMPORT_COMPLETE`

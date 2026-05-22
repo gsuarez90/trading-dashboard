@@ -7,8 +7,16 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 _analyzer = SentimentIntensityAnalyzer()
 
 
+def _get_api_key() -> str:
+    key = os.environ.get("FINNHUB_API_KEY")
+    if key:
+        return key
+    from services.ssm_service import get_secret
+    return get_secret("/trading-app/finnhub-key")
+
+
 def _client() -> finnhub.Client:
-    return finnhub.Client(api_key=os.environ["FINNHUB_API_KEY"])
+    return finnhub.Client(api_key=_get_api_key())
 
 
 def get_quote(ticker: str) -> dict:

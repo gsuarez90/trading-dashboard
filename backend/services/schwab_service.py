@@ -28,8 +28,12 @@ def _get_client():
     if _client is not None:
         return _client
 
-    api_key = os.environ["SCHWAB_CLIENT_ID"]
-    app_secret = os.environ["SCHWAB_CLIENT_SECRET"]
+    api_key = os.environ.get("SCHWAB_CLIENT_ID")
+    app_secret = os.environ.get("SCHWAB_CLIENT_SECRET")
+    if not api_key or not app_secret:
+        from services.ssm_service import get_secret
+        api_key = api_key or get_secret("/trading-app/schwab-client-id")
+        app_secret = app_secret or get_secret("/trading-app/schwab-client-secret")
 
     # Lambda: token stored in Secrets Manager
     secret_arn = os.environ.get("SCHWAB_TOKEN_SECRET_ARN")

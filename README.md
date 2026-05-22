@@ -720,10 +720,10 @@ All 8 guardrails run through `guardrail_service.check_all()` in `backend/service
 
 | Credential | Where stored | How it reaches Lambda | Auto-rotated? |
 |-----------|-------------|----------------------|---------------|
-| `ANTHROPIC_API_KEY` | SSM SecureString `/trading-app/anthropic-key` | SAM `{{resolve:ssm-secure:...}}` → Lambda env var at deploy | No — update SSM manually |
-| `FINNHUB_API_KEY` | SSM SecureString `/trading-app/finnhub-key` | Same SAM resolve | No |
-| `SCHWAB_CLIENT_ID` | SSM SecureString `/trading-app/schwab-client-id` | Same SAM resolve | No |
-| `SCHWAB_CLIENT_SECRET` | SSM SecureString `/trading-app/schwab-client-secret` | Same SAM resolve | No |
+| `ANTHROPIC_API_KEY` | SSM SecureString `/trading-app/anthropic-key` | `ssm_service.get_secret()` at runtime (env var fallback for local dev) | No — update SSM manually |
+| `FINNHUB_API_KEY` | SSM SecureString `/trading-app/finnhub-key` | Same runtime SSM fetch | No |
+| `SCHWAB_CLIENT_ID` | SSM SecureString `/trading-app/schwab-client-id` | Same runtime SSM fetch | No |
+| `SCHWAB_CLIENT_SECRET` | SSM SecureString `/trading-app/schwab-client-secret` | Same runtime SSM fetch | No |
 | Schwab OAuth token | Secrets Manager `/trading-app/schwab-token` | `schwab_service.py` reads + writes via boto3 at runtime | Yes — `schwab-py` auto-refreshes and writes back |
 | Robinhood credentials | Secrets Manager `/trading-app/robinhood-credentials` | `robinhood_service.py` reads via boto3 at runtime | No — update via CLI |
 

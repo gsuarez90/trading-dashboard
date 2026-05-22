@@ -1,4 +1,5 @@
 import json
+import os
 import re
 
 import anthropic
@@ -137,7 +138,11 @@ _anthropic_client: anthropic.Anthropic | None = None
 def _get_client() -> anthropic.Anthropic:
     global _anthropic_client
     if _anthropic_client is None:
-        _anthropic_client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            from services.ssm_service import get_secret
+            api_key = get_secret("/trading-app/anthropic-key")
+        _anthropic_client = anthropic.Anthropic(api_key=api_key)
     return _anthropic_client
 
 

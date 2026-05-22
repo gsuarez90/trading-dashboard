@@ -19,11 +19,7 @@ Globals:
         DAILY_LOSS_LIMIT:     !Sub '{{resolve:ssm:/trading-app/daily-loss-limit}}'
         DAILY_TRADE_LIMIT:    !Sub '{{resolve:ssm:/trading-app/daily-trade-limit}}'
         MAX_POSITION_SIZE_PCT: !Sub '{{resolve:ssm:/trading-app/max-position-size-pct}}'
-        # API keys — SSM SecureString
-        ANTHROPIC_API_KEY:    !Sub '{{resolve:ssm-secure:/trading-app/anthropic-key}}'
-        FINNHUB_API_KEY:      !Sub '{{resolve:ssm-secure:/trading-app/finnhub-key}}'
-        SCHWAB_CLIENT_ID:     !Sub '{{resolve:ssm-secure:/trading-app/schwab-client-id}}'
-        SCHWAB_CLIENT_SECRET: !Sub '{{resolve:ssm-secure:/trading-app/schwab-client-secret}}'
+        # API keys fetched from SSM SecureString at Lambda cold start (see ssm_service.py)
         # Infrastructure
         DYNAMO_TABLE_NAME:       trading-dashboard
         S3_CHARTS_BUCKET:        trading-dashboard-charts
@@ -84,9 +80,12 @@ Resources:
 
   TradingTable:
     Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
     Properties:
       TableName: trading-dashboard
       BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
       AttributeDefinitions:
         - AttributeName: trade_id
           AttributeType: S
@@ -148,8 +147,8 @@ Resources:
               - dynamodb:Query
               - dynamodb:Scan
             Resource:
-              - !GetAtt TradingTable.Arn
-              - !Sub '${TradingTable.Arn}/index/*'
+              - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/trading-dashboard'
+              - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/trading-dashboard/index/*'
 
   SecretsPolicy:
     Type: AWS::IAM::ManagedPolicy
@@ -165,6 +164,23 @@ Resources:
               - !Ref SchwabTokenSecret
               - !Ref RobinhoodCredentials
 
+  SsmApiKeysPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - ssm:GetParameter
+              - kms:Decrypt
+            Resource:
+              - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/trading-app/anthropic-key'
+              - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/trading-app/finnhub-key'
+              - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/trading-app/schwab-client-id'
+              - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/trading-app/schwab-client-secret'
+              - !Sub 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+
   # ── Lambda functions ──────────────────────────────────────────────────────────
 
   # Main API — handles all HTTP requests from CloudFront / API Gateway
@@ -172,10 +188,10 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: main.handler
-      ReservedConcurrentExecutions: 5
       Policies:
         - !Ref DynamoPolicy
         - !Ref SecretsPolicy
+        - !Ref SsmApiKeysPolicy
       Events:
         Api:
           Type: HttpApi
@@ -188,10 +204,10 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: main.price_monitor_handler
-      ReservedConcurrentExecutions: 2
       Policies:
         - !Ref DynamoPolicy
         - !Ref SecretsPolicy
+        - !Ref SsmApiKeysPolicy
       Events:
         MarketHours:
           Type: Schedule
@@ -203,10 +219,10 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: main.end_of_day_handler
-      ReservedConcurrentExecutions: 1
       Policies:
         - !Ref DynamoPolicy
         - !Ref SecretsPolicy
+        - !Ref SsmApiKeysPolicy
       Events:
         EOD:
           Type: Schedule
@@ -222,6 +238,7 @@ Resources:
       Policies:
         - !Ref DynamoPolicy
         - !Ref SecretsPolicy
+        - !Ref SsmApiKeysPolicy
       Events:
         DailyTrigger:
           Type: Schedule
@@ -237,6 +254,7 @@ Resources:
       MemorySize: 1024
       Policies:
         - !Ref DynamoPolicy
+        - !Ref SsmApiKeysPolicy
       Events:
         NightlyAnalytics:
           Type: Schedule
@@ -344,7 +362,7 @@ Outputs:
     Value: !Ref PrivateDistribution
   DynamoTableName:
     Description: DynamoDB table name
-    Value: !Ref TradingTable
+    Value: trading-dashboard
   GitHubDeployRoleArn:
     Description: OIDC deploy role ARN — paste into AWS_DEPLOY_ROLE_ARN GitHub secret
     Value: !GetAtt GitHubDeployRole.Arn
