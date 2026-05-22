@@ -101,6 +101,7 @@ myAITradingApp/
 │   │   ├── portfolio_factory.py      # Selects robinhood_service or synthetic_portfolio by PORTFOLIO_MODE
 │   │   ├── robinhood_service.py      # Live portfolio data from Robinhood (PORTFOLIO_MODE=live)
 │   │   ├── schwab_service.py         # Schwab OAuth client — quotes, movers, price history
+│   │   ├── ssm_service.py            # Runtime SSM SecureString fetch — API keys cached per Lambda container
 │   │   └── synthetic_portfolio.py    # Fake portfolio data for public demo (no credentials needed)
 │   │
 │   ├── models/
@@ -731,7 +732,7 @@ All 8 guardrails run through `guardrail_service.check_all()` in `backend/service
 
 **`.env.example`** — Documents every required variable with empty values. Safe to commit. The reference for what needs to go into SSM/Secrets Manager before the first AWS deploy.
 
-SSM parameters are resolved at deploy time — the value gets baked into the Lambda environment variable. Secrets Manager values are fetched at runtime — the Lambda always gets the current version, which is why the Schwab token auto-rotation works transparently.
+Non-secret config (PORTFOLIO_MODE, TRADING_MODE, DAILY_GOAL, etc.) uses plain SSM parameters resolved at deploy time — the value gets baked into the Lambda environment variable. API key secrets (Anthropic, Finnhub, Schwab client ID/secret) use SSM SecureString and are fetched at **runtime** by `ssm_service.get_secret()` on Lambda cold start, then cached for the container lifetime. Secrets Manager values (Schwab token, Robinhood credentials) are also fetched at runtime — the Lambda always gets the current version, which is why Schwab token auto-rotation works transparently.
 
 ---
 
