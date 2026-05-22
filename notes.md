@@ -294,10 +294,17 @@ aws ssm put-parameter --region us-east-1 --name /trading-app/schwab-client-secre
 ```
 
 **Step 3 — Build and deploy the SAM stack**
+
+Run this with your own local AWS credentials (`aws configure`) — GitHub Actions cannot deploy until Step 5 is complete, so the first deploy must be done manually.
 ```bash
 sam build && sam deploy
 ```
-This creates Lambda functions, DynamoDB, S3 buckets, CloudFront distributions, IAM roles, and Secrets Manager secrets. Outputs include the API Gateway URL and CloudFront URLs.
+This creates Lambda functions, DynamoDB, S3 buckets, CloudFront distributions, Secrets Manager secrets, and the GitHub Actions OIDC provider + deploy role. Outputs include the API Gateway URL, CloudFront URLs, and the deploy role ARN needed for Step 5.
+
+**If the GitHub OIDC provider already exists in your account** (from another project), skip provider creation:
+```bash
+sam deploy --parameter-overrides CreateOIDCProvider=false
+```
 
 **Step 4 — Seed the Schwab OAuth token into Secrets Manager**
 ```bash
