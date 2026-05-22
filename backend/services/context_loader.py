@@ -1,4 +1,5 @@
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
@@ -139,44 +140,84 @@ def load_context(
     trade_scope = os.environ.get("TRADE_SCOPE", "open")
     daily_goal = float(os.environ.get("DAILY_GOAL", 100))
 
-    # ── Portfolio ─────────────────────────────────────────────────────────────
-    try:
-        portfolio = portfolio_factory.get_provider().get_portfolio()
-        portfolio["positions"] = _enrich_positions(portfolio.get("positions", []))
-    except Exception:
-        portfolio = {"cash": 0.0, "equity": 0.0, "positions": []}
+    # ── Round 1: all independent I/O in parallel ──────────────────────────────
+    def _fetch_portfolio():
+        try:
+            return portfolio_factory.get_provider().get_portfolio()
+        except Exception:
+            return {"cash": 0.0, "equity": 0.0, "positions": []}
+
+    def _fetch_scanner():
+        try:
+            return market_data_service.get_scanner_results(tickers, min_change_pct=min_change_pct)
+        except Exception:
+            return []
+
+    def _fetch_movers():
+        try:
+            return market_data_service.get_previous_day_movers(tickers, limit=10)
+        except Exception:
+            return []
+
+    def _fetch_trades():
+        try:
+            return dynamo_service.get_trades_by_date(today)
+        except Exception:
+            return []
+
+    def _fetch_guardrail_events():
+        try:
+            return dynamo_service.get_guardrail_events_by_date(today)
+        except Exception:
+            return []
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        f_portfolio       = pool.submit(_fetch_portfolio)
+        f_scanner         = pool.submit(_fetch_scanner)
+        f_movers          = pool.submit(_fetch_movers)
+        f_trades          = pool.submit(_fetch_trades)
+        f_guardrail_events = pool.submit(_fetch_guardrail_events)
+
+    portfolio       = f_portfolio.result()
+    scanner_results = f_scanner.result()
+    top_movers      = f_movers.result()
+    trades_today    = f_trades.result()
+    guardrail_events = f_guardrail_events.result()
+
     cash = float(portfolio.get("cash", 0.0))
 
-    # ── Scanner + movers ──────────────────────────────────────────────────────
-    try:
-        scanner_results = market_data_service.get_scanner_results(
-            tickers, min_change_pct=min_change_pct
-        )
-        top_movers = market_data_service.get_previous_day_movers(tickers, limit=10)
-    except Exception:
-        scanner_results = []
-        top_movers = []
-
-    # ── Sentiment — scored for movers + holdings ──────────────────────────────
+    # ── Round 2: enrich positions + sentiment in parallel ─────────────────────
     sentiment_tickers = list(
         {m["ticker"] for m in top_movers} | {p["ticker"] for p in portfolio.get("positions", [])}
     )
-    try:
-        sentiment = finnhub_service.score_batch_sentiment(sentiment_tickers)
-    except Exception:
-        sentiment = []
 
-    # ── Trade history ─────────────────────────────────────────────────────────
-    try:
-        trades_today = dynamo_service.get_trades_by_date(today)
-    except Exception:
-        trades_today = []
+    def _enrich():
+        try:
+            return _enrich_positions(portfolio.get("positions", []))
+        except Exception:
+            return portfolio.get("positions", [])
 
+    def _fetch_sentiment():
+        try:
+            return finnhub_service.score_batch_sentiment(sentiment_tickers)
+        except Exception:
+            return []
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_enriched  = pool.submit(_enrich)
+        f_sentiment = pool.submit(_fetch_sentiment)
+
+    portfolio["positions"] = f_enriched.result()
+    sentiment = f_sentiment.result()
+
+    # ── Local computation (no I/O) ────────────────────────────────────────────
     realized_pnl_today = round(
-        sum(t.get("realized_pnl", 0) or 0 for t in trades_today if t.get("status") != "open"),
+        sum(t.get("realized_pnl", 0) or 0 for t in trades_today if t.get("status") == "closed"),
         2,
     )
-    trade_count_today = len(trades_today)
+    trade_count_today = sum(
+        1 for t in trades_today if t.get("status") in {"open", "closed", "pending"}
+    )
 
     # ── Guardrail status ──────────────────────────────────────────────────────
     ctx = GuardrailContext(
@@ -187,11 +228,6 @@ def load_context(
         now=now_et,
     )
     guardrail_status = get_status(ctx)
-
-    try:
-        guardrail_events = dynamo_service.get_guardrail_events_by_date(today)
-    except Exception:
-        guardrail_events = []
 
     return DailyContext(
         date=today,
