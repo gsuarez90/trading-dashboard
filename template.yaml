@@ -181,6 +181,25 @@ Resources:
               - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/trading-app/schwab-client-secret'
               - !Sub 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*'
 
+  # ── API Gateway ──────────────────────────────────────────────────────────────
+
+  ServerlessHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+          - https://ait.gsuarez.dev
+          - https://degen.gsuarez.dev
+          - http://localhost:5173
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+        AllowMethods:
+          - GET
+          - POST
+          - DELETE
+          - OPTIONS
+
   # ── Lambda functions ──────────────────────────────────────────────────────────
 
   # Main API — handles all HTTP requests from CloudFront / API Gateway

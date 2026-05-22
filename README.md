@@ -1,12 +1,21 @@
 # AI Trading Dashboard
 
-A personal AI-powered trading assistant that runs your daily workflow — morning market briefing, live scanner, sentiment analysis, paper trade logging, and conversational trade suggestions — all from a single dashboard. Built for one person, on real market data, with guardrails that prevent bad habits before live money is involved.
+My personal trading assistant. Built to run my daily workflow — morning briefing, scanner, sentiment analysis, trade logging, and AI suggestions — without juggling half a dozen tools.
 
-This is not a SaaS product. There are no other users, no subscriptions, no shared infrastructure. Every design decision optimizes for one thing: helping a single retail trader build a disciplined, data-driven daily process before switching from paper to live trading.
+This isn't a SaaS product. It's built for one user (me). Every design decision is about building discipline before putting real money in: paper trade on real Schwab data, prove the process works, then go live.
 
-The app runs in two modes simultaneously. The **public version** uses a synthetic (fake) portfolio and is open to anyone — it demonstrates the tooling without exposing real account data. The **private version** connects to a real brokerage account and is locked behind Cloudflare Access, which blocks everyone except the owner via an email one-time-PIN login. Same code, same backend, different `PORTFOLIO_MODE` environment variable baked into the frontend build.
+The app runs as two separate deployments. The **public version** at [ait.gsuarez.dev](https://ait.gsuarez.dev) uses synthetic portfolio data and is open to anyone. The **private version** connects to my real brokerage and sits behind Cloudflare Access — email one-time-PIN, no one else gets in. Same codebase, same backend, different `PORTFOLIO_MODE` env var baked into the frontend build.
 
-The philosophy: paper trade on real Schwab market data until the numbers prove it works — win rate above 55%, reward-to-risk above 1.5, beating the S&P 500 more than 60% of days. Claude assists with briefings, context, and suggestions, but never places orders. Every trade decision is manual. The guardrail system enforces rules automatically so discipline isn't optional on a bad day.
+The bar before going live: win rate above 55%, R/R above 1.5, beating SPY more than 60% of days. Claude helps with briefings and suggestions but never touches orders. Every trade is manual. The guardrail system enforces the rules automatically so I can't override them on a bad day.
+
+---
+
+## Live
+
+| Version | URL | Access |
+|---------|-----|--------|
+| Public demo | [ait.gsuarez.dev](https://ait.gsuarez.dev) | Open to anyone — synthetic portfolio |
+| Private dashboard | [degen.gsuarez.dev](https://degen.gsuarez.dev) | Cloudflare Access — email OTP only |
 
 ---
 
@@ -16,24 +25,22 @@ The philosophy: paper trade on real Schwab market data until the numbers prove i
 
 | Technology | Role |
 |-----------|------|
-| **React** | UI framework — components, state, rendering |
-| **Vite** | Build tool — instant dev server via native ES modules; `npm run build` bundles for production |
-| **AWS S3** | Hosts the built frontend files (two buckets: public and private) |
-| **AWS CloudFront** | CDN — serves frontend files from edge locations worldwide, handles HTTPS |
-
-React builds the interface as components (reusable pieces of UI). Vite is what runs and packages those components — it's significantly faster than older tools like Create React App because it doesn't bundle everything upfront during development. For production, `npm run build` outputs static HTML/CSS/JS files that get uploaded to S3 and distributed via CloudFront.
+| **React** | UI framework |
+| **Vite** | Build tool — dev server + production bundler |
+| **AWS S3** | Hosts built frontend files (two buckets: public and private) |
+| **AWS CloudFront** | CDN — HTTPS, edge caching |
 
 ### Backend
 
 | Technology | Role |
 |-----------|------|
-| **FastAPI** | Python web framework — handles HTTP requests, validates inputs, returns JSON |
-| **Mangum** | Adapter — translates API Gateway's event format into something FastAPI understands |
-| **AWS Lambda** | Serverless compute — runs the backend code on demand, no server to maintain |
-| **AWS API Gateway (HTTP API)** | Receives HTTP requests from the internet and routes them to Lambda |
-| **uvicorn** | Local dev only — runs FastAPI as a regular web server on port 8000 |
+| **FastAPI** | Python web framework |
+| **Mangum** | Adapter — translates API Gateway events into FastAPI requests |
+| **AWS Lambda** | Serverless compute |
+| **AWS API Gateway (HTTP API)** | Routes HTTP requests to Lambda |
+| **uvicorn** | Local dev only — runs FastAPI on port 8000 |
 
-In production, a user's browser sends an HTTP request → API Gateway receives it → triggers Lambda → Lambda runs the FastAPI app (via Mangum) → returns a JSON response. In local dev, uvicorn replaces API Gateway + Lambda entirely and runs FastAPI directly. Mangum is the glue: an adapter is a translator that converts one thing's event format into another's without changing the underlying logic.
+In production: browser → API Gateway → Lambda → FastAPI (via Mangum). In local dev, uvicorn replaces API Gateway + Lambda entirely.
 
 ### Data & Storage
 
@@ -41,11 +48,7 @@ In production, a user's browser sends an HTTP request → API Gateway receives i
 |-----------|---------------|
 | **AWS DynamoDB** | Trades, cache items (scanner/sentiment/briefing), guardrail events |
 | **AWS SSM Parameter Store** | Non-secret config: trading mode, daily goal, loss limit, trade limits |
-| **AWS Secrets Manager** | Sensitive credentials: Schwab OAuth token, Robinhood username/password, API keys |
-
-DynamoDB is a NoSQL database — meaning data is stored as flexible key-value documents rather than rigid tables with fixed columns. This fits well here because trade records have many optional fields (not every trade has an exit price yet), and cache items look completely different from trade records but can share the same table.
-
-SSM Parameter Store (Systems Manager) is AWS's service for storing configuration values. SecureString parameters are encrypted at rest using KMS (Key Management Service — AWS's encryption key service). Secrets Manager is for true secrets — credentials that need tighter IAM controls and potentially auto-rotation.
+| **AWS Secrets Manager** | Sensitive credentials: Schwab OAuth token, Robinhood username/password |
 
 ### External APIs
 
@@ -53,20 +56,20 @@ SSM Parameter Store (Systems Manager) is AWS's service for storing configuration
 |---------|---------|
 | **Schwab API** (`schwab-py`) | Real-time quotes, top movers across major indexes, OHLCV price history |
 | **Finnhub** | News headlines for sentiment scoring |
-| **Anthropic Claude API** | Morning briefing generation, conversational chat, structured trade suggestions |
+| **Anthropic Claude API** | Morning briefing, conversational chat, structured trade suggestions |
 
-The Schwab connection requires an OAuth token (like a session key) that the `schwab-py` library manages automatically — it refreshes the token when it expires and writes the updated token back to Secrets Manager.
+The Schwab connection uses an OAuth token that `schwab-py` manages automatically — it refreshes when expired and writes the updated token back to Secrets Manager.
 
 ### Infrastructure & Security
 
 | Technology | Role |
 |-----------|------|
-| **AWS SAM** (`template.yaml`) | IaC — Infrastructure as Code. Describes the entire AWS stack in one YAML file |
-| **GitHub Actions** (`deploy.yml`) | CI/CD — Continuous Deployment. Deploys automatically on every push to `main` |
+| **AWS SAM** (`template.yaml`) | IaC — entire AWS stack defined in one YAML file |
+| **GitHub Actions** (`deploy.yml`) | CI/CD — deploys automatically on every push to `main` |
 | **Cloudflare** | Sits in front of CloudFront: rate limiting, DDoS protection, bot blocking |
 | **Cloudflare Access** | Auth layer for the private version — email one-time-PIN login wall |
 
-SAM (Serverless Application Model) means you never click around the AWS console to create resources — `template.yaml` is the single source of truth for what exists in AWS. Running `sam deploy` creates or updates everything. CI/CD means the deployment is automated: push code to GitHub, GitHub Actions runs `sam build && sam deploy` and syncs both frontends to S3 without any manual steps.
+SAM means the AWS console is never touched for infrastructure — `template.yaml` is the single source of truth. `sam deploy` creates or updates everything.
 
 ---
 
@@ -150,53 +153,29 @@ myAITradingApp/
 
 ---
 
-## How the App Starts (Local Dev)
+## Running Locally
 
-Run from the repo root:
+From the repo root:
 
 ```bash
 bash scripts/start.sh
 ```
 
-Then open `http://localhost:5173` in your browser.
+Then open `http://localhost:5173`.
 
-Here is what the script does, in order:
-
-**1. Activate the Python virtual environment**
-If `VIRTUAL_ENV` is not already set, the script sources `backend/.venv/Scripts/activate`. This adds the venv's Python and all installed packages (FastAPI, schwab-py, boto3, etc.) to the shell's PATH. Without this, the system Python would be used and none of the dependencies would be found.
-
-**2. Load `.env.local`**
-The script uses `set -a` (auto-export) and `source .env.local` to load every variable as an environment variable available to all child processes. This is how `SCHWAB_CLIENT_ID`, `ANTHROPIC_API_KEY`, `PORTFOLIO_MODE`, and all other config values reach the Python process.
-
-**3. Start uvicorn in the background**
-```bash
-uvicorn main:app --reload --port 8000
-```
-`--reload` means uvicorn watches Python files and restarts automatically when any file changes. The `&` runs it in the background so the script continues. The process ID is saved to cleanly kill uvicorn when the script exits.
-
-**4. Wait for the backend to be ready**
-The script polls `GET http://localhost:8000/health` in a loop, sleeping 1 second between attempts. This prevents Vite from starting before the backend can accept requests.
-
-**5. Start Vite (blocks until Ctrl+C)**
-```bash
-cd frontend && npm run dev
-```
-Vite starts on port 5173. Any request to `/api/*` is proxied through Vite to `http://localhost:8000`, so the frontend can call `fetch('/api/portfolio/')` without hard-coding the backend URL. In production, the real API Gateway URL is baked into the Vite build via `VITE_API_URL`.
-
-**6. Clean up**
-When Ctrl+C is pressed, the signal goes to the whole process group. Uvicorn shuts down gracefully. This is what the "Shutting down / Application shutdown complete" messages in the terminal indicate — a clean stop, not a crash.
+The script activates the Python venv, loads `.env.local`, starts uvicorn on port 8000 in the background, waits for it to be ready, then starts Vite on port 5173. Vite proxies `/api/*` requests to the backend. Ctrl+C kills everything cleanly.
 
 **What `main.py` does on startup:**
-- Calls `load_dotenv()` which reads `.env.local` — this is a no-op in Lambda because Lambda injects environment variables directly
-- Registers all 8 routers under their URL prefixes (`/scanner`, `/portfolio`, `/ai`, etc.)
-- Calls `dynamo_service.ensure_table_exists()` in a `try/except` to create the DynamoDB table if needed (non-fatal)
+- Calls `load_dotenv()` to read `.env.local` (no-op in Lambda — env vars are injected directly)
+- Registers all routers under their URL prefixes (`/scanner`, `/portfolio`, `/ai`, etc.)
+- Calls `dynamo_service.ensure_table_exists()` in a `try/except` (creates local table if missing — non-fatal in prod since CloudFormation manages it)
 - Creates the Mangum `handler` object that Lambda calls for every HTTP request
 
 ---
 
 ## Feature Flows
 
-This section traces every feature from the moment you interact with the UI to the final result. File names and function names are included so you can find the code when something breaks.
+Every feature traced from UI interaction to final result. File names and function names included so you can find the code when something breaks.
 
 ---
 
@@ -225,7 +204,7 @@ Response:    Briefing text displayed as a formatted paragraph
 Error path:  "Error: <server detail>" shown in the panel
 ```
 
-The briefing is generated once per day. After the first page load triggers a Claude call and caches the result, every subsequent load — including after backend restarts — reads from DynamoDB without touching the Claude API. In production, the 7am scheduled job pre-generates the briefing before anyone visits.
+The briefing generates once per day. After the first page load caches it, every subsequent load reads from DynamoDB without touching the Claude API. In production the 7am scheduled job pre-generates it before anyone visits.
 
 ---
 
@@ -256,7 +235,7 @@ Response:    Table: ticker, price, % change (green/red), volume, high, low
 Error path:  "Error: <server detail>" — shows actual reason (e.g. "401 Unauthorized" = Schwab token issue)
 ```
 
-The visibility gate (`document.visibilityState === 'visible'`) pauses polling when the browser tab is in the background, reducing unnecessary Schwab API calls.
+The visibility gate pauses polling when the browser tab is in the background.
 
 ---
 
@@ -280,7 +259,7 @@ Response:    Cash balance + table: ticker, shares, avg cost, current price, unre
 Error path:  Error shown inline; if Schwab enrichment fails, positions still show but price = "—"
 ```
 
-`portfolio_factory.py` is the switch between real and demo data — it reads `PORTFOLIO_MODE` at request time, so changing the mode in `.env.local` and restarting takes effect immediately.
+`portfolio_factory.py` reads `PORTFOLIO_MODE` at request time — changing it in `.env.local` and restarting takes effect immediately.
 
 ---
 
@@ -310,7 +289,7 @@ Response:    List of tickers with: score, label (bullish/bearish/neutral), artic
 Error path:  Empty list; panel renders nothing rather than crashing
 ```
 
-VADER (Valence Aware Dictionary and sEntiment Reasoner) is a rule-based model trained on social media text — it scores each headline without needing to call an AI API. Sentiment runs on the same tickers as the scanner plus portfolio holdings, so it always reflects what's relevant today.
+VADER scores headlines without an AI API call. Sentiment runs on the same tickers as the scanner plus current portfolio holdings.
 
 ---
 
@@ -339,7 +318,7 @@ Response:    Claude's reply in a chat bubble
 Error path:  "Chat failed: <reason>" shown in chat area
 ```
 
-Claude receives the complete market context on every message — it knows your positions, movers, how much P&L you've made/lost today, and what guardrails have fired. This is why it can answer "should I add to my NVDA position?" with real situational awareness.
+Claude gets the full market context on every message — positions, movers, today's P&L, guardrails that fired. This is why it can answer "should I add to my NVDA position?" with actual situational awareness.
 
 ---
 
@@ -367,7 +346,7 @@ Response:    Each suggestion as a card showing all trade parameters
 Error path:  "Trade suggestion failed: <reason>" error message
 ```
 
-Claude's suggestions are structured data validated by Pydantic — not free text. Every suggestion includes plain-English Robinhood instructions because the app never places orders directly. You execute manually.
+Suggestions are structured Pydantic-validated data, not free text. Every suggestion includes plain-English Robinhood instructions because the app never places orders directly.
 
 ---
 
@@ -398,7 +377,7 @@ Response:    Button shows "✓ Paper Trade Logged" and stays disabled (prevents 
 Error path:  Inline error on the card showing which guardrail fired and why
 ```
 
-The guardrail check runs on every submission — paper or live. If a guardrail fires, the event is logged to DynamoDB, appears in GuardrailsPanel, and is included in Claude's context on the next chat message.
+The guardrail check runs on every submission — paper or live. If a guardrail fires, the event is logged to DynamoDB, appears in GuardrailsPanel, and is included in Claude's context on the next message.
 
 ---
 
@@ -524,7 +503,7 @@ Lambda:      main.py → refresh_handler()
 Returns:     {refreshed_at, scanner_count, sentiment_count, briefing_cached, errors}
 ```
 
-This is the only automatic Claude API call each day. After this runs, all three caches are warm — the first page load of the day is instant with no external API calls.
+Only automatic Claude API call of the day. After this runs all three caches are warm — first page load is instant.
 
 ---
 
@@ -547,7 +526,7 @@ Returns:     {paper_closed: N, live_flagged: N}
 
 ## Data Model
 
-Everything lives in a single DynamoDB table named `trading-dashboard`. Three types of items share this table, distinguished by their `status` field.
+Everything lives in a single DynamoDB table named `trading-dashboard`. Three item types share the table, distinguished by their `status` field.
 
 ### Table keys
 
@@ -557,9 +536,7 @@ Everything lives in a single DynamoDB table named `trading-dashboard`. Three typ
 | `status` | String | **GSI hash key** — `open`, `closed`, `live`, `guardrail_event`, `cache` |
 | `date` | String | **GSI range key** — `YYYY-MM-DD` for trades/events, ISO timestamp for cache |
 
-### What is a GSI?
-
-A GSI (Global Secondary Index) is a secondary access path on a DynamoDB table. Without it, finding "all open trades from today" requires scanning every row in the table. The GSI lets the app run an efficient query: `status = "open" AND date = "2026-05-21"` — regardless of how large the table grows.
+The GSI (`status-date-index`) is what makes queries like "all open trades from today" efficient — without it every query would scan the full table.
 
 ### Trade items
 
@@ -567,9 +544,9 @@ Written by `paper_trading_service.open_trade()` and `dynamo_service.put_trade()`
 
 ### Cache items
 
-`trade_id` = `"cache#scanner"`, `"cache#sentiment"`, or `"cache#briefing"`. The payload is stored as a JSON string. Written by `dynamo_service.put_cache()`, read by `dynamo_service.get_cache()`.
+`trade_id` = `"cache#scanner"`, `"cache#sentiment"`, or `"cache#briefing"`. Payload stored as JSON string. Written by `dynamo_service.put_cache()`, read by `dynamo_service.get_cache()`.
 
-Freshness check in `cache_service._cache_is_fresh(cached_at)`: parses `cached_at` as an ISO timestamp, converts to Eastern Time, returns `True` only if it matches today's ET date. Cache is never invalidated mid-day — it simply becomes stale at midnight ET.
+Freshness check in `cache_service._cache_is_fresh(cached_at)`: parses `cached_at` as ISO timestamp, converts to ET, returns `True` only if it matches today's ET date. Cache is never invalidated mid-day — it goes stale at midnight ET.
 
 ### Guardrail event items
 
@@ -607,7 +584,7 @@ Freshness check in `cache_service._cache_is_fresh(cached_at)`: parses `cached_at
 Public user
     │
     ▼
-Cloudflare
+Cloudflare (ait.gsuarez.dev)
   ├─ Rate limit: 30 req/min per IP (block 1 hour on exceed)
   ├─ Bot Fight Mode: ON
   └─ DDoS protection: ON (automatic)
@@ -625,7 +602,7 @@ Cloudflare
 ### Production — Private Version
 
 ```
-Owner visits private.yourdomain.com
+Owner visits degen.gsuarez.dev
     │
     ▼
 Cloudflare Access
@@ -700,7 +677,7 @@ Required GitHub repository secrets: `AWS_DEPLOY_ROLE_ARN`, `PUBLIC_API_URL`, `PR
 
 ## Guardrails Reference
 
-All 8 guardrails run through `guardrail_service.check_all()` in `backend/services/guardrail_service.py`. The same checks apply to paper and live trades alike.
+All 8 guardrails run through `guardrail_service.check_all()` in `backend/services/guardrail_service.py`. Same checks for paper and live.
 
 | Guardrail | What it checks | Triggered when |
 |-----------|---------------|----------------|
@@ -713,7 +690,7 @@ All 8 guardrails run through `guardrail_service.check_all()` in `backend/service
 | `intraday_60min_cutoff` | Current time for intraday trades | After 3:00pm ET — less than 60 minutes left in session |
 | `buying_power_check` | Trade value vs cash balance | Insufficient cash to cover the full position |
 
-**Kill switch:** Two-step confirm in GuardrailsPanel. Immediately closes all open paper trades (`close_reason="kill_switch"`) and sets `flagged_for_manual_close=true` on live trades — those require manual action in Robinhood. The app never auto-closes live positions.
+**Kill switch:** Two-step confirm in GuardrailsPanel. Immediately closes all open paper trades (`close_reason="kill_switch"`) and sets `flagged_for_manual_close=true` on live trades. The app never auto-closes live positions.
 
 ---
 
@@ -728,11 +705,11 @@ All 8 guardrails run through `guardrail_service.check_all()` in `backend/service
 | Schwab OAuth token | Secrets Manager `/trading-app/schwab-token` | `schwab_service.py` reads + writes via boto3 at runtime | Yes — `schwab-py` auto-refreshes and writes back |
 | Robinhood credentials | Secrets Manager `/trading-app/robinhood-credentials` | `robinhood_service.py` reads via boto3 at runtime | No — update via CLI |
 
-**`.env.local`** — Local dev only. Contains all credentials plus config values. Gitignored — never committed, never deployed. Copy from `.env.example` and fill in your values. The `start.sh` script loads this automatically.
+**`.env.local`** — Local dev only. Contains all credentials plus config. Gitignored. Copy from `.env.example` and fill in values. `start.sh` loads it automatically.
 
-**`.env.example`** — Documents every required variable with empty values. Safe to commit. The reference for what needs to go into SSM/Secrets Manager before the first AWS deploy.
+**`.env.example`** — Documents every required variable with empty values. Safe to commit. Reference for what needs to go into SSM/Secrets Manager before first AWS deploy.
 
-Non-secret config (PORTFOLIO_MODE, TRADING_MODE, DAILY_GOAL, etc.) uses plain SSM parameters resolved at deploy time — the value gets baked into the Lambda environment variable. API key secrets (Anthropic, Finnhub, Schwab client ID/secret) use SSM SecureString and are fetched at **runtime** by `ssm_service.get_secret()` on Lambda cold start, then cached for the container lifetime. Secrets Manager values (Schwab token, Robinhood credentials) are also fetched at runtime — the Lambda always gets the current version, which is why Schwab token auto-rotation works transparently.
+Non-secret config (PORTFOLIO_MODE, TRADING_MODE, DAILY_GOAL, etc.) uses plain SSM parameters resolved at deploy time — baked into Lambda environment variables. API key secrets (Anthropic, Finnhub, Schwab client ID/secret) use SSM SecureString fetched at **runtime** by `ssm_service.get_secret()` on Lambda cold start, then cached for the container lifetime. Secrets Manager values (Schwab token, Robinhood credentials) are also fetched at runtime — always the current version, which is why Schwab token auto-rotation works transparently.
 
 ---
 
@@ -740,9 +717,9 @@ Non-secret config (PORTFOLIO_MODE, TRADING_MODE, DAILY_GOAL, etc.) uses plain SS
 
 ### Phase 1 — Paper Trade (current)
 
-Paper trade every day on real Schwab data. Use the morning briefing, scanner, and Claude suggestions to build a daily routine. Track results in DynamoDB. The goal is not profit yet — it's proving the process is repeatable before real money is involved.
+Paper trade every day on real Schwab data. Use the morning briefing, scanner, and Claude suggestions to build a daily routine. Track results in DynamoDB. The goal isn't profit yet — it's proving the process is repeatable before real money is involved.
 
-**Hard gate before Phase 2:** All 14 tests in `backend/tests/test_guardrails.py` must pass. These verify the safety rails work correctly — they are non-negotiable.
+**Hard gate before Phase 2:** All 14 tests in `backend/tests/test_guardrails.py` must pass.
 
 ### Phase 2 — Validation Analytics
 
@@ -753,13 +730,13 @@ Add `validation_service.py` to benchmark paper results:
 - Slippage-adjusted P&L still hits the daily goal
 - Monte Carlo simulation: probability of a net-positive month > 70%
 
-A SageMaker ML pipeline starts during this phase — it trains on trade history and shows predictions alongside Claude suggestions. Observe only; no action taken on ML signals yet.
+A SageMaker ML pipeline starts during this phase — trains on trade history and shows predictions alongside Claude suggestions. Observe only; no action taken on ML signals yet.
 
 ### Phase 3 — Live Trading (Small Size)
 
-Switch `TRADING_MODE=live` (requires explicit confirmation — this is the point of no return for real money). Trade at 25% of normal position sizes. Execute manually in Robinhood. SageMaker predictions visible but observe-only.
+Switch `TRADING_MODE=live` (requires explicit confirmation). Trade at 25% of normal position sizes. Execute manually in Robinhood. SageMaker predictions visible but observe-only.
 
-**Phase 2 → 3 gate:** All five validation criteria above must pass simultaneously before this switch.
+**Phase 2 → 3 gate:** All five validation criteria above must pass simultaneously.
 
 ### Phase 4 — Full Live Trading + ML Active
 
