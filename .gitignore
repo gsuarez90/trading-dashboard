@@ -26,7 +26,6 @@ schwab_token.json
 
 # Claude Code local data
 .claude/
-CLAUDE.md
 .playwright-mcp/
 
 # Misc
