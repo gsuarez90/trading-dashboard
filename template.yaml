@@ -183,7 +183,7 @@ Resources:
 
   # ── API Gateway ──────────────────────────────────────────────────────────────
 
-  ServerlessHttpApi:
+  TradingHttpApi:
     Type: AWS::Serverless::HttpApi
     Properties:
       CorsConfiguration:
@@ -217,6 +217,7 @@ Resources:
           Properties:
             Path: /{proxy+}
             Method: ANY
+            ApiId: !Ref TradingHttpApi
 
   # Price monitor — every 5 min during market hours (9:30am–4pm ET = 13:30–21:00 UTC)
   PriceMonitorFunction:
@@ -366,7 +367,7 @@ Resources:
 Outputs:
   ApiUrl:
     Description: API Gateway endpoint URL — use for PUBLIC_API_URL and PRIVATE_API_URL GitHub secrets
-    Value: !Sub 'https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com'
+    Value: !Sub 'https://${TradingHttpApi}.execute-api.${AWS::Region}.amazonaws.com'
   PublicCloudfrontUrl:
     Description: Public CloudFront distribution URL
     Value: !Sub 'https://${PublicDistribution.DomainName}'
