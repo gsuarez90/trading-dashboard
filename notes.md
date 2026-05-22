@@ -275,22 +275,22 @@ All commands run from the repo root in any terminal with `aws` CLI installed and
 
 **Step 1 — Create SSM parameters (plain config values)**
 ```bash
-aws ssm put-parameter --name /trading-app/portfolio-mode --value live --type String
-aws ssm put-parameter --name /trading-app/trading-mode --value paper --type String
-aws ssm put-parameter --name /trading-app/profit-mode --value cash_intraday --type String
-aws ssm put-parameter --name /trading-app/trade-scope --value holdings_only --type String
-aws ssm put-parameter --name /trading-app/daily-goal --value 100 --type String
-aws ssm put-parameter --name /trading-app/daily-loss-limit --value 200 --type String
-aws ssm put-parameter --name /trading-app/daily-trade-limit --value 3 --type String
-aws ssm put-parameter --name /trading-app/max-position-size-pct --value 20 --type String
+aws ssm put-parameter --region us-east-1 --name /trading-app/portfolio-mode --value live --type String --overwrite
+aws ssm put-parameter --region us-east-1 --name /trading-app/trading-mode --value paper --type String --overwrite
+aws ssm put-parameter --region us-east-1 --name /trading-app/profit-mode --value cash_intraday --type String --overwrite
+aws ssm put-parameter --region us-east-1 --name /trading-app/trade-scope --value holdings_only --type String --overwrite
+aws ssm put-parameter --region us-east-1 --name /trading-app/daily-goal --value 100 --type String --overwrite
+aws ssm put-parameter --region us-east-1 --name /trading-app/daily-loss-limit --value 200 --type String --overwrite
+aws ssm put-parameter --region us-east-1 --name /trading-app/daily-trade-limit --value 3 --type String --overwrite
+aws ssm put-parameter --region us-east-1 --name /trading-app/max-position-size-pct --value 20 --type String --overwrite
 ```
 
 **Step 2 — Load API keys as SecureString (encrypted)**
 ```bash
-aws ssm put-parameter --name /trading-app/anthropic-key --value "YOUR_KEY" --type SecureString
-aws ssm put-parameter --name /trading-app/finnhub-key --value "YOUR_KEY" --type SecureString
-aws ssm put-parameter --name /trading-app/schwab-client-id --value "YOUR_ID" --type SecureString
-aws ssm put-parameter --name /trading-app/schwab-client-secret --value "YOUR_SECRET" --type SecureString
+aws ssm put-parameter --region us-east-1 --name /trading-app/anthropic-key --value "YOUR_KEY" --type SecureString --overwrite
+aws ssm put-parameter --region us-east-1 --name /trading-app/finnhub-key --value "YOUR_KEY" --type SecureString --overwrite
+aws ssm put-parameter --region us-east-1 --name /trading-app/schwab-client-id --value "YOUR_ID" --type SecureString --overwrite
+aws ssm put-parameter --region us-east-1 --name /trading-app/schwab-client-secret --value "YOUR_SECRET" --type SecureString --overwrite
 ```
 
 **Step 3 — Build and deploy the SAM stack**
@@ -396,7 +396,7 @@ High-level checklist:
 - [ ] Request ACM certificate in `us-east-1`, validate via Cloudflare DNS CNAMEs
 - [ ] Attach ACM cert to both CloudFront distributions (Alternate domain names)
 - [ ] Configure Cloudflare: rate limiting (30 req/min), Bot Fight Mode, Access application (email OTP)
-- [ ] Add GitHub secrets for CI/CD auto-deploy (`AWS_ROLE_ARN`, `PUBLIC_CLOUDFRONT_ID`, `PRIVATE_CLOUDFRONT_ID`, `PUBLIC_S3_BUCKET`, `PRIVATE_S3_BUCKET`)
+- [ ] Add GitHub secrets for CI/CD auto-deploy (`AWS_DEPLOY_ROLE_ARN`, `PUBLIC_API_URL`, `PRIVATE_API_URL`, `PUBLIC_CF_DIST_ID`, `PRIVATE_CF_DIST_ID`)
 
 ---
 
@@ -501,3 +501,17 @@ Run from VS Code PowerShell terminal. First run showed a cleanup warning (EPERM 
 **Key gotcha:** Close Claude Code before running the reinstall if you see the EPERM cleanup warning.
 
 ---
+
+## Bash Test Flags (`-z`, `-f`, etc.)
+
+Bash uses single-letter flags inside `[ ... ]` to test conditions. The most common ones:
+
+```
+[ -z "$VAR" ]   # true if string is empty (zero length)
+[ -n "$VAR" ]   # true if string is non-empty
+[ -f "$PATH" ]  # true if path is a regular file
+[ -d "$PATH" ]  # true if path is a directory
+[ -e "$PATH" ]  # true if path exists (file or directory)
+```
+
+Example from `scripts/start.sh`: `if [ -z "$VIRTUAL_ENV" ]` checks whether a venv is already active (the venv sets `$VIRTUAL_ENV` when sourced). `if [ -f "$VENV" ]` checks the activate script file exists before trying to source it. The syntax is bash-specific — most languages would use string equality or a file existence method instead.
