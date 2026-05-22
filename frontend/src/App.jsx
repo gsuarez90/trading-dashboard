@@ -7,6 +7,10 @@ import PaperTradingPanel from './components/PaperTradingPanel'
 import LiveTrackingPanel from './components/LiveTrackingPanel'
 import GuardrailsPanel from './components/GuardrailsPanel'
 
+// Private panels are hidden in the synthetic (public demo) build.
+// Locally VITE_PORTFOLIO_MODE is unset, so all panels render.
+const isPrivate = import.meta.env.VITE_PORTFOLIO_MODE !== 'synthetic'
+
 export default function App() {
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto', padding: '24px 16px' }}>
@@ -29,17 +33,21 @@ export default function App() {
         <SentimentFeed />
       </div>
 
-      <div style={{ marginBottom: 16 }}>
-        <PaperTradingPanel />
-      </div>
+      {isPrivate && (
+        <>
+          <div style={{ marginBottom: 16 }}>
+            <PaperTradingPanel />
+          </div>
 
-      <div style={{ marginBottom: 16 }}>
-        <LiveTrackingPanel />
-      </div>
+          <div style={{ marginBottom: 16 }}>
+            <LiveTrackingPanel />
+          </div>
 
-      <div style={{ marginBottom: 16 }}>
-        <GuardrailsPanel />
-      </div>
+          <div style={{ marginBottom: 16 }}>
+            <GuardrailsPanel />
+          </div>
+        </>
+      )}
 
       <PortfolioView />
     </div>
