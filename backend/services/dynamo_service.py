@@ -143,18 +143,14 @@ def get_pending_trades_for_date(date: str) -> list[dict]:
 
 
 def get_trades_by_date(date: str) -> list[dict]:
-    """All trades for a given date (YYYY-MM-DD). Used for daily context and P&L."""
-    response = _table().query(
-        IndexName="status-date-index",
-        KeyConditionExpression=Key("status").eq("open") & Key("date").eq(date),
-    )
-    items = response.get("Items", [])
-
-    # Also fetch closed trades for the date via scan (GSI only indexes open)
-    closed = _table().scan(
-        FilterExpression=Attr("date").eq(date) & Attr("status").ne("open"),
-    )
-    items.extend(closed.get("Items", []))
+    """All trade records for a given date. Excludes guardrail events and cache entries."""
+    items = []
+    for status in ("open", "closed", "pending", "expired"):
+        resp = _table().query(
+            IndexName="status-date-index",
+            KeyConditionExpression=Key("status").eq(status) & Key("date").eq(date),
+        )
+        items.extend(resp.get("Items", []))
     return [_from_item(item) for item in items]
 
 
@@ -168,9 +164,9 @@ def get_realized_pnl_today(date: str) -> float:
 
 
 def get_trade_count_today(date: str) -> int:
-    """Number of trades opened today. Used by the daily trade limit guardrail."""
+    """Number of trade orders placed today. Counts open/closed/pending; not expired (never filled)."""
     trades = get_trades_by_date(date)
-    return len(trades)
+    return sum(1 for t in trades if t.get("status") in {"open", "closed", "pending"})
 
 
 # ── Guardrail events ──────────────────────────────────────────────────────────
