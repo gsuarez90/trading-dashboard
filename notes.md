@@ -307,11 +307,16 @@ aws secretsmanager put-secret-value \
 ```
 
 **Step 5 — Add GitHub repository secrets** (Settings → Secrets → Actions)
-- `AWS_DEPLOY_ROLE_ARN` — OIDC role ARN so CI/CD can deploy without long-lived keys
-- `PUBLIC_API_URL` — API Gateway URL from `sam deploy` output
-- `PRIVATE_API_URL` — same URL (same Lambda, different frontend build)
-- `PUBLIC_CF_DIST_ID` — CloudFront distribution ID for `trading-dashboard-public`
-- `PRIVATE_CF_DIST_ID` — CloudFront distribution ID for `trading-dashboard-private`
+
+All values come from the `sam deploy` stack outputs — run `aws cloudformation describe-stacks --stack-name trading-dashboard --region us-east-1 --query 'Stacks[0].Outputs'` to see them all at once.
+
+| Secret | Stack output key |
+|--------|-----------------|
+| `AWS_DEPLOY_ROLE_ARN` | `GitHubDeployRoleArn` |
+| `PUBLIC_API_URL` | `ApiUrl` |
+| `PRIVATE_API_URL` | `ApiUrl` (same value — same Lambda) |
+| `PUBLIC_CF_DIST_ID` | `PublicCloudfrontId` |
+| `PRIVATE_CF_DIST_ID` | `PrivateCloudfrontId` |
 
 After Step 5, every push to `main` that touches `backend/`, `frontend/`, `template.yaml`, or `samconfig.toml` automatically deploys via GitHub Actions.
 

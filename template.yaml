@@ -35,7 +35,50 @@ Parameters:
     Default: prod
     AllowedValues: [prod, staging]
 
+  CreateOIDCProvider:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >
+      Set to false if a GitHub Actions OIDC provider already exists in this
+      account (each AWS account can only have one per provider URL).
+
+Conditions:
+  ShouldCreateOIDCProvider: !Equals [!Ref CreateOIDCProvider, 'true']
+
 Resources:
+
+  # ── GitHub Actions OIDC deploy role ──────────────────────────────────────────
+
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateOIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+
+  GitHubDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: trading-dashboard-github-deploy
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub 'arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                'token.actions.githubusercontent.com:aud': sts.amazonaws.com
+              StringLike:
+                # Scoped to this repo only — any branch/ref
+                'token.actions.githubusercontent.com:sub': 'repo:gsuarez90/myAITradingApp:*'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
 
   # ── DynamoDB ─────────────────────────────────────────────────────────────────
 
@@ -285,14 +328,23 @@ Resources:
 
 Outputs:
   ApiUrl:
-    Description: API Gateway endpoint URL
+    Description: API Gateway endpoint URL — use for PUBLIC_API_URL and PRIVATE_API_URL GitHub secrets
     Value: !Sub 'https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com'
   PublicCloudfrontUrl:
     Description: Public CloudFront distribution URL
     Value: !Sub 'https://${PublicDistribution.DomainName}'
+  PublicCloudfrontId:
+    Description: Public CloudFront distribution ID — use for PUBLIC_CF_DIST_ID GitHub secret
+    Value: !Ref PublicDistribution
   PrivateCloudfrontUrl:
     Description: Private CloudFront distribution URL
     Value: !Sub 'https://${PrivateDistribution.DomainName}'
+  PrivateCloudfrontId:
+    Description: Private CloudFront distribution ID — use for PRIVATE_CF_DIST_ID GitHub secret
+    Value: !Ref PrivateDistribution
   DynamoTableName:
     Description: DynamoDB table name
     Value: !Ref TradingTable
+  GitHubDeployRoleArn:
+    Description: OIDC deploy role ARN — paste into AWS_DEPLOY_ROLE_ARN GitHub secret
+    Value: !GetAtt GitHubDeployRole.Arn
