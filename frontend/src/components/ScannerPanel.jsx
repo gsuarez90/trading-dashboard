@@ -12,7 +12,7 @@ export default function ScannerPanel() {
     setLoading(true)
     setError(null)
     fetch(`${API}/scanner/movers`)
-      .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
+      .then(r => r.ok ? r.json() : r.json().then(b => Promise.reject(b.detail || r.statusText)))
       .then(data => { setMovers(data); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })
   }, [])

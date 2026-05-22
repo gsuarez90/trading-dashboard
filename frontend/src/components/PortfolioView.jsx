@@ -12,7 +12,7 @@ export default function PortfolioView() {
     setLoading(true)
     setError(null)
     fetch(`${API}/portfolio/`)
-      .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
+      .then(r => r.ok ? r.json() : r.json().then(b => Promise.reject(b.detail || r.statusText)))
       .then(data => { setPortfolio(data); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })
   }, [])

@@ -269,6 +269,220 @@ Sentiment is scored using VADER (Valence Aware Dictionary and sEntiment Reasoner
 
 The thresholds are intentionally tight — VADER tends to read financial headlines as weakly positive even on neutral days. `article_count` indicates data reliability: a score of +0.80 on 1 article is far less reliable than +0.20 on 12 articles.
 
+## First SAM Deploy — Step-by-Step
+
+All commands run from the repo root in any terminal with `aws` CLI installed and credentials configured (`aws configure` or env vars).
+
+**Step 1 — Create SSM parameters (plain config values)**
+```bash
+aws ssm put-parameter --name /trading-app/portfolio-mode --value live --type String
+aws ssm put-parameter --name /trading-app/trading-mode --value paper --type String
+aws ssm put-parameter --name /trading-app/profit-mode --value cash_intraday --type String
+aws ssm put-parameter --name /trading-app/trade-scope --value holdings_only --type String
+aws ssm put-parameter --name /trading-app/daily-goal --value 100 --type String
+aws ssm put-parameter --name /trading-app/daily-loss-limit --value 200 --type String
+aws ssm put-parameter --name /trading-app/daily-trade-limit --value 3 --type String
+aws ssm put-parameter --name /trading-app/max-position-size-pct --value 20 --type String
+```
+
+**Step 2 — Load API keys as SecureString (encrypted)**
+```bash
+aws ssm put-parameter --name /trading-app/anthropic-key --value "YOUR_KEY" --type SecureString
+aws ssm put-parameter --name /trading-app/finnhub-key --value "YOUR_KEY" --type SecureString
+aws ssm put-parameter --name /trading-app/schwab-client-id --value "YOUR_ID" --type SecureString
+aws ssm put-parameter --name /trading-app/schwab-client-secret --value "YOUR_SECRET" --type SecureString
+```
+
+**Step 3 — Build and deploy the SAM stack**
+```bash
+sam build && sam deploy
+```
+This creates Lambda functions, DynamoDB, S3 buckets, CloudFront distributions, IAM roles, and Secrets Manager secrets. Outputs include the API Gateway URL and CloudFront URLs.
+
+**Step 4 — Seed the Schwab OAuth token into Secrets Manager**
+```bash
+aws secretsmanager put-secret-value \
+  --secret-id /trading-app/schwab-token \
+  --secret-string "$(cat backend/schwab_token.json)"
+```
+
+**Step 5 — Add GitHub repository secrets** (Settings → Secrets → Actions)
+- `AWS_DEPLOY_ROLE_ARN` — OIDC role ARN so CI/CD can deploy without long-lived keys
+- `PUBLIC_API_URL` — API Gateway URL from `sam deploy` output
+- `PRIVATE_API_URL` — same URL (same Lambda, different frontend build)
+- `PUBLIC_CF_DIST_ID` — CloudFront distribution ID for `trading-dashboard-public`
+- `PRIVATE_CF_DIST_ID` — CloudFront distribution ID for `trading-dashboard-private`
+
+After Step 5, every push to `main` that touches `backend/`, `frontend/`, `template.yaml`, or `samconfig.toml` automatically deploys via GitHub Actions.
+
+---
+
+## Cloudflare + Custom Domain Setup (Step 23)
+
+Full step-by-step config lives in `cloudflare/setup.md`. Key things to know:
+
+### Non-obvious prerequisite — ACM certificate + CloudFront alternate domain
+
+CloudFront rejects requests for your custom domain until you do two things in AWS:
+
+1. **Request an ACM certificate in `us-east-1`** (CloudFront requires this region specifically — certificates in other regions won't appear in CloudFront's dropdown)
+   - Go to ACM → Request public certificate → add both subdomains (e.g. `trading.yourdomain.com` and `private.yourdomain.com`, or `*.yourdomain.com`)
+   - Validate via DNS — ACM gives you a CNAME record to add; if your DNS is in Cloudflare this takes ~2 minutes
+2. **Add the custom domain to each CloudFront distribution**
+   - CloudFront → your distribution → Edit → Alternate domain names → add `trading.yourdomain.com`
+   - Select the ACM certificate you just issued
+
+Without this, you get an SSL error even after DNS is pointing correctly.
+
+### Private dashboard login flow
+
+Cloudflare Access intercepts every request to `private.yourdomain.com`:
+1. Enter your email (`your-email@example.com`)
+2. Check email for 6-digit PIN
+3. Enter PIN → authenticated for 24 hours
+
+No app, no password manager, no username/password to manage. Anyone else hits a wall before your app is ever reached.
+
+### DNS setup (Porkbun + Cloudflare)
+
+You keep the domain registered at Porkbun — that never changes. You change the **nameservers** at Porkbun to point to Cloudflare's. Cloudflare then manages all DNS. Your existing project's records get migrated during Cloudflare's setup wizard. Two CNAME records for the trading app:
+
+| Subdomain | Points to | Proxy |
+|-----------|-----------|-------|
+| `trading.yourdomain.com` | `d1abc.cloudfront.net` | ✅ Proxied |
+| `private.yourdomain.com` | `d2xyz.cloudfront.net` | ✅ Proxied |
+
+Both must be proxied (orange cloud) — Cloudflare Access only works when traffic flows through Cloudflare.
+
+### Why Cloudflare instead of all-AWS
+
+Porkbun is a registrar only — it can point DNS records but has no proxy layer, WAF, or auth. The all-AWS equivalent (WAF + Cognito + Lambda@Edge) runs ~$10–15/mo and requires code. Cloudflare's free tier covers everything: DDoS, rate limiting, Bot Fight Mode, and Access auth.
+
+---
+
+## Pre-Phase 2 Checklist (before Steps 25–37)
+
+Complete these in order before starting Phase 2 work.
+
+### 1. Performance Optimization Pass (do first — testable locally, no AWS needed)
+Audit and fix real bottlenecks before deploying so optimized code ships from day one.
+The bottlenecks in this app are network I/O and Lambda cold starts, not algorithmic complexity.
+
+**a) Parallel API calls in `context_loader.py`**
+If `load_context()` calls Schwab, Finnhub, and DynamoDB sequentially, convert to `asyncio.gather()`.
+Sequential: 3 calls × ~500ms = ~1500ms. Parallel: ~500ms (longest single call). ~60% reduction.
+Testable locally with uvicorn before any AWS deployment.
+
+**b) DynamoDB query patterns**
+Audit every DynamoDB call — ensure all use `query` via the GSI (`status-date-index`), never `scan`.
+A scan reads every item in the table; a query is filtered at DynamoDB level.
+Testable locally against the real DynamoDB table.
+
+**c) Lambda package size** (check during `sam build`, not before)
+Smaller deployment `.zip` = faster cold start. Run `sam build` and check the package size.
+Audit `requirements.txt` for unused dependencies: `pip install pipdeptree && pipdeptree`
+
+### 2. First AWS Deploy
+See "First SAM Deploy — Step-by-Step" runbook above.
+`sam build` (check `.zip` size here) → `sam deploy` → seed Schwab token into Secrets Manager → add GitHub secrets.
+
+### 3. Infrastructure & Domain Setup
+See the detailed runbook below: "Porkbun → Cloudflare Setup (Step-by-Step)"
+
+High-level checklist:
+- [ ] Add domain to Cloudflare, review imported DNS records, change Porkbun nameservers
+- [ ] Wait for propagation (minutes to 24h) — check at whatsmydns.net
+- [ ] Add two proxied CNAME records in Cloudflare (trading + private subdomains → CloudFront URLs from Step 2)
+- [ ] Request ACM certificate in `us-east-1`, validate via Cloudflare DNS CNAMEs
+- [ ] Attach ACM cert to both CloudFront distributions (Alternate domain names)
+- [ ] Configure Cloudflare: rate limiting (30 req/min), Bot Fight Mode, Access application (email OTP)
+- [ ] Add GitHub secrets for CI/CD auto-deploy (`AWS_ROLE_ARN`, `PUBLIC_CLOUDFRONT_ID`, `PRIVATE_CLOUDFRONT_ID`, `PUBLIC_S3_BUCKET`, `PRIVATE_S3_BUCKET`)
+
+---
+
+## Porkbun → Cloudflare Setup (Step-by-Step)
+
+This is your first time doing this. Do it in order — each step unlocks the next.
+
+### Phase A — Add your domain to Cloudflare
+
+1. Go to cloudflare.com → create a free account (or log in)
+2. Click **Add a site** → enter your domain (e.g. `yourdomain.com`) → click **Add site**
+3. Select the **Free** plan → click **Continue**
+4. Cloudflare scans your existing Porkbun DNS records and shows you a list of imported records
+5. **Review every record carefully** — compare against what Porkbun currently shows under your domain's DNS settings
+   - Your existing portfolio site's A record or CNAME should be there
+   - MX records (email), TXT records (email verification) should all be present
+   - If anything is missing, add it manually before proceeding
+   - Set proxy status (orange cloud vs grey cloud) as needed — orange = Cloudflare proxies traffic, grey = DNS only
+6. Click **Continue** — Cloudflare shows you two nameserver addresses (e.g. `aria.ns.cloudflare.com`, `bob.ns.cloudflare.com`)
+7. **Do not close this page yet** — you need those nameserver addresses for the next step
+
+### Phase B — Change nameservers at Porkbun
+
+1. Log in to Porkbun → go to **Domain Management** → click your domain
+2. Find the **Nameservers** section (usually labeled "Edit Nameservers" or "Custom Nameservers")
+3. By default Porkbun shows its own nameservers (e.g. `curitiba.ns.porkbun.com`) — replace all of them
+4. Enter Cloudflare's two nameserver addresses from Phase A
+5. Save — Porkbun will warn you that this hands off DNS control, that's expected
+6. Back in Cloudflare, click **Done, check nameservers**
+
+Propagation takes anywhere from a few minutes to 24 hours. Cloudflare emails you when it detects the change. You can check progress at **whatsmydns.net** — search your domain, select NS record type, and watch for Cloudflare's nameservers to appear globally.
+
+**Your existing portfolio site stays up during propagation** — both Porkbun and Cloudflare have the same records at this point, so requests resolve correctly either way.
+
+### Phase C — Add trading app DNS records (do after SAM deploy — you need CloudFront URLs)
+
+Once propagation is confirmed and you have the CloudFront domain names from your SAM deploy:
+
+1. In Cloudflare → your domain → **DNS** → **Add record**
+2. Add the first record:
+   - Type: `CNAME`
+   - Name: `trading` (resolves to `trading.yourdomain.com`)
+   - Target: your public CloudFront URL (e.g. `d1abc123.cloudfront.net`)
+   - Proxy status: **Proxied** (orange cloud — required for rate limiting)
+3. Add the second record:
+   - Type: `CNAME`
+   - Name: `private` (resolves to `private.yourdomain.com`)
+   - Target: your private CloudFront URL (e.g. `d2xyz456.cloudfront.net`)
+   - Proxy status: **Proxied** (orange cloud — required for Cloudflare Access)
+4. Both records save instantly — no propagation wait needed since Cloudflare already controls DNS
+
+### Phase D — ACM certificate (do after Phase C DNS records are live)
+
+1. Open AWS Console → switch region to **us-east-1** (required for CloudFront)
+2. Go to **Certificate Manager** → **Request a certificate** → **Request a public certificate**
+3. Add domain names:
+   - `trading.yourdomain.com`
+   - `private.yourdomain.com`
+   - (optionally `*.yourdomain.com` to cover both with one cert)
+4. Validation method: **DNS validation** → click **Request**
+5. ACM shows you CNAME records to add for validation (one per domain)
+6. In Cloudflare → DNS → add each validation CNAME record ACM gives you
+   - Proxy status: **DNS only** (grey cloud) — ACM validation requires this
+7. ACM validates automatically within ~2 minutes once DNS resolves. Status changes from **Pending** to **Issued**.
+
+### Phase E — Attach cert to CloudFront
+
+1. AWS Console → **CloudFront** → click your public distribution → **Edit**
+2. Under **Alternate domain names (CNAMEs)** → add `trading.yourdomain.com`
+3. Under **Custom SSL certificate** → select the ACM cert you just issued
+4. Save — CloudFront deploys the change (~5 min)
+5. Repeat for the private distribution: alternate domain `private.yourdomain.com`, same cert
+6. Test: visit `https://trading.yourdomain.com` — should load your public frontend
+
+### Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|-------------|-----|
+| Site down after nameserver change | DNS record missing in Cloudflare import | Add the missing record in Cloudflare DNS |
+| SSL error after custom domain | ACM cert not attached to CloudFront | Complete Phase E |
+| ACM stuck in Pending validation | Validation CNAME not added or set to proxied | Set proxy status to grey cloud (DNS only) |
+| Cloudflare Access not prompting | CNAME proxy status is grey | Set to orange cloud (Proxied) |
+| `trading.yourdomain.com` not resolving | CloudFront alternate domain not configured | Complete Phase E step 2 |
+
+---
+
 ## SentimentFeed — Dynamic Watchlist Fix
 
 `SentimentFeed.jsx` originally had a hardcoded 14-ticker list and called `/sentiment/batch/scores` directly, bypassing the Schwab movers API entirely. Fixed in two parts:
@@ -277,3 +491,13 @@ The thresholds are intentionally tight — VADER tends to read financial headlin
 2. Updated `SentimentFeed.jsx` to fetch from `/api/ai/sentiment` instead of the hardcoded call.
 
 The Sentiment card now shows live movers (up to 18 tickers from SPX/Nasdaq/Dow via Schwab) plus any tickers currently held in the portfolio.
+
+**Fix:**
+```
+npm i -g @anthropic-ai/claude-code
+```
+Run from VS Code PowerShell terminal. First run showed a cleanup warning (EPERM on `claude.exe` still locked). Second run after closing Claude Code = clean, no errors. Auto-update banner gone.
+
+**Key gotcha:** Close Claude Code before running the reinstall if you see the EPERM cleanup warning.
+
+---

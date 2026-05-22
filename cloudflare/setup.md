@@ -100,14 +100,14 @@ Click **Next**.
 |---------|-------|
 | Policy name | `Owner only` |
 | Action | Allow |
-| Include rule | Emails → `george.suarez.2@outlook.com` |
+| Include rule | Emails → `your-email@example.com` |
 
 Click **Next** → **Add application**.
 
 ### How login works
 When you visit `private.yourdomain.com`:
 1. Cloudflare Access intercepts the request
-2. You enter your email (`george.suarez.2@outlook.com`)
+2. You enter your email (`your-email@example.com`)
 3. Cloudflare emails you a one-time PIN
 4. You enter the PIN → you're in for 24 hours
 5. Anyone else → blocked entirely, never reaches your app

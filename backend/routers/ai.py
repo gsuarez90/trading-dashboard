@@ -34,6 +34,11 @@ def get_briefing():
             }
         ctx = load_context()
         briefing = claude_service.morning_briefing(ctx)
+        try:
+            from services import dynamo_service
+            dynamo_service.put_cache("briefing", {"briefing": briefing, "date": ctx.date})
+        except Exception:
+            pass  # non-fatal — cache write failure doesn't break the response
         return {
             "briefing": briefing,
             "date": ctx.date,

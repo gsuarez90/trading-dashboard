@@ -628,7 +628,7 @@ Owner visits private.yourdomain.com
     │
     ▼
 Cloudflare Access
-  └─ Shows login page — enter george.suarez.2@outlook.com
+  └─ Shows login page — enter your-email@example.com
   └─ Emails 6-digit PIN → enter PIN → authenticated 24 hours
   └─ Anyone else: blocked entirely, never reaches S3 or Lambda
     │
