@@ -133,6 +133,15 @@ def get_open_trades() -> list[dict]:
     return [_from_item(item) for item in response.get("Items", [])]
 
 
+def get_pending_trades_for_date(date: str) -> list[dict]:
+    """All pending (unfilled) orders for a given date. Used by price monitor and EOD handler."""
+    response = _table().query(
+        IndexName="status-date-index",
+        KeyConditionExpression=Key("status").eq("pending") & Key("date").eq(date),
+    )
+    return [_from_item(item) for item in response.get("Items", [])]
+
+
 def get_trades_by_date(date: str) -> list[dict]:
     """All trades for a given date (YYYY-MM-DD). Used for daily context and P&L."""
     response = _table().query(

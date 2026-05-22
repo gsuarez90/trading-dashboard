@@ -101,26 +101,52 @@ def run_daily_refresh() -> dict:
 
 
 def run_price_monitor() -> dict:
-    """Every 5 min during market hours — check open trades against live prices.
+    """Every 1 min during market hours — fill pending orders + check open trades.
 
-    Auto-closes paper trades that hit target or stop.
-    Flags live trades for manual close (does not auto-close live positions).
+    Pending paper orders: fill when market price meets the limit condition.
+    Open paper trades: auto-close at target or stop.
+    Live trades: flag for manual close (never auto-closed).
     """
+    today = datetime.now(tz=ET).strftime("%Y-%m-%d")
     open_trades = dynamo_service.get_open_trades()
-    if not open_trades:
-        return {"checked": 0, "closed": 0, "flagged": 0}
+    pending_trades = dynamo_service.get_pending_trades_for_date(today)
 
-    # Fetch live prices for all open tickers in one batch call
-    tickers = list({t["ticker"] for t in open_trades if t.get("ticker")})
+    if not open_trades and not pending_trades:
+        return {"checked": 0, "filled": 0, "closed": 0, "flagged": 0}
+
+    # Single batch quote call covering all unique tickers
+    all_tickers = list({t["ticker"] for t in open_trades + pending_trades if t.get("ticker")})
     try:
-        quotes = {q["ticker"]: q["price"] for q in schwab_service.get_batch_quotes(tickers)}
+        quotes = {q["ticker"]: q["price"] for q in schwab_service.get_batch_quotes(all_tickers)}
     except Exception:
         quotes = {}
 
     now_iso = datetime.now(tz=ET).isoformat()
+    filled = 0
     closed = 0
     flagged = 0
 
+    # ── Fill pending orders ───────────────────────────────────────────────────
+    for trade in pending_trades:
+        ticker = trade.get("ticker")
+        price = quotes.get(ticker)
+        if price is None:
+            continue
+
+        limit = trade.get("limit_price") or trade.get("entry_price")
+        direction = trade.get("direction", "long")
+
+        fill_condition = (price <= limit) if direction == "long" else (price >= limit)
+        if not fill_condition:
+            continue
+
+        try:
+            paper_trading_service.fill_pending_order(trade["trade_id"], price)
+            filled += 1
+        except Exception:
+            pass
+
+    # ── Monitor open trades ───────────────────────────────────────────────────
     for trade in open_trades:
         ticker = trade.get("ticker")
         price = quotes.get(ticker)
@@ -162,14 +188,24 @@ def run_price_monitor() -> dict:
             except Exception:
                 pass
 
-    return {"checked": len(open_trades), "closed": closed, "flagged": flagged}
+    return {
+        "checked": len(open_trades) + len(pending_trades),
+        "filled": filled,
+        "closed": closed,
+        "flagged": flagged,
+    }
 
 
 def run_end_of_day() -> dict:
-    """3:45pm ET — close all open paper trades at market price; flag live trades."""
+    """3:45pm ET — expire pending orders, close open paper trades, flag live trades."""
+    today = datetime.now(tz=ET).strftime("%Y-%m-%d")
+
+    # Expire any orders that never filled today
+    expired = paper_trading_service.expire_unfilled_orders(today)
+
     open_trades = dynamo_service.get_open_trades()
     if not open_trades:
-        return {"paper_closed": 0, "live_flagged": 0}
+        return {"paper_closed": 0, "live_flagged": 0, "expired": expired}
 
     tickers = list({t["ticker"] for t in open_trades if t.get("ticker")})
     try:
@@ -204,4 +240,4 @@ def run_end_of_day() -> dict:
             except Exception:
                 pass
 
-    return {"paper_closed": paper_closed, "live_flagged": live_flagged}
+    return {"paper_closed": paper_closed, "live_flagged": live_flagged, "expired": expired}

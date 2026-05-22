@@ -13,6 +13,7 @@ const REASON_LABEL = {
   manual:      'Manual',
   eod_close:   'EOD close',
   kill_switch: 'Kill switch',
+  expired:     'Expired (unfilled)',
 }
 
 function fmt(n, prefix = '$') {
@@ -164,6 +165,48 @@ function OpenRow({ trade, onClose }) {
   )
 }
 
+// ── Pending order row ─────────────────────────────────────────────────────────
+
+function PendingRow({ trade }) {
+  const dir = DIR_STYLE[trade.direction] ?? DIR_STYLE.long
+
+  return (
+    <div style={{
+      border: '1px solid var(--border)', borderRadius: 'var(--radius)',
+      padding: 12, marginBottom: 8, opacity: 0.85,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <strong style={{ fontSize: 13, fontFamily: 'var(--mono)', minWidth: 52 }}>{trade.ticker}</strong>
+        <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 10, ...dir }}>
+          {trade.direction.toUpperCase()}
+        </span>
+        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+          {trade.shares} sh
+        </span>
+        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+          Limit <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>
+            ${(trade.limit_price ?? trade.entry_price).toFixed(2)}
+          </span>
+        </span>
+        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+          T <span style={{ fontFamily: 'var(--mono)', color: 'var(--green)' }}>${trade.target_price.toFixed(2)}</span>
+          {' / '}
+          S <span style={{ fontFamily: 'var(--mono)', color: 'var(--red)' }}>${trade.stop_loss.toFixed(2)}</span>
+        </span>
+        <span style={{
+          fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 10,
+          background: '#1c2d1c', color: '#d29922', marginLeft: 'auto',
+        }}>
+          PENDING
+        </span>
+        <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+          {fmtTime(trade.pending_since)}
+        </span>
+      </div>
+    </div>
+  )
+}
+
 // ── History row ───────────────────────────────────────────────────────────────
 
 function HistoryRow({ trade }) {
@@ -205,8 +248,13 @@ function OpenTab({ trades, onClose }) {
   return open.map(t => <OpenRow key={t.trade_id} trade={t} onClose={onClose} />)
 }
 
+function PendingTab({ pending }) {
+  if (pending.length === 0) return <p className="status">No pending orders today.</p>
+  return pending.map(t => <PendingRow key={t.trade_id} trade={t} />)
+}
+
 function HistoryTab({ trades }) {
-  const closed = trades.filter(t => t.status !== 'open')
+  const closed = trades.filter(t => t.status !== 'open' && t.status !== 'pending')
   if (closed.length === 0) return <p className="status">No closed trades today.</p>
   return (
     <div>
@@ -251,21 +299,23 @@ function SummaryTab({ summary }) {
 // ── Panel ─────────────────────────────────────────────────────────────────────
 
 export default function PaperTradingPanel() {
-  const [tab, setTab]         = useState('open')
+  const [tab, setTab]           = useState('open')
   const [expanded, setExpanded] = useState(true)
-  const [trades, setTrades]   = useState([])
-  const [summary, setSummary] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError]     = useState(null)
+  const [trades, setTrades]     = useState([])
+  const [pending, setPending]   = useState([])
+  const [summary, setSummary]   = useState(null)
+  const [loading, setLoading]   = useState(false)
+  const [error, setError]       = useState(null)
 
   const load = useCallback(() => {
     setLoading(true)
     setError(null)
     Promise.all([
       fetch(`${API}/paper-trades/`).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
+      fetch(`${API}/paper-trades/pending`).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
       fetch(`${API}/paper-trades/summary`).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
     ])
-      .then(([t, s]) => { setTrades(t); setSummary(s); setLoading(false) })
+      .then(([t, p, s]) => { setTrades(t); setPending(p); setSummary(s); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })
   }, [])
 
@@ -278,7 +328,7 @@ export default function PaperTradingPanel() {
     })
   }
 
-  const TABS = ['open', 'history', 'summary']
+  const TABS = ['open', 'pending', 'history', 'summary']
 
   return (
     <div className="panel">
@@ -294,17 +344,22 @@ export default function PaperTradingPanel() {
         {expanded && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <div style={{ display: 'flex', gap: 4 }}>
-              {TABS.map(t => (
-                <button key={t} onClick={() => setTab(t)} style={{
-                  background: tab === t ? 'var(--surface)' : 'none',
-                  border: `1px solid ${tab === t ? 'var(--border)' : 'transparent'}`,
-                  borderRadius: 'var(--radius)', color: tab === t ? 'var(--text)' : 'var(--text-muted)',
-                  padding: '3px 10px', fontSize: 11, cursor: 'pointer', fontWeight: tab === t ? 600 : 400,
-                  textTransform: 'capitalize',
-                }}>
-                  {t === 'open' ? `Open${trades.filter(x => x.status === 'open').length ? ` (${trades.filter(x => x.status === 'open').length})` : ''}` : t.charAt(0).toUpperCase() + t.slice(1)}
-                </button>
-              ))}
+              {TABS.map(t => {
+                const count =
+                  t === 'open'    ? trades.filter(x => x.status === 'open').length :
+                  t === 'pending' ? pending.length : 0
+                const label = t.charAt(0).toUpperCase() + t.slice(1)
+                return (
+                  <button key={t} onClick={() => setTab(t)} style={{
+                    background: tab === t ? 'var(--surface)' : 'none',
+                    border: `1px solid ${tab === t ? 'var(--border)' : 'transparent'}`,
+                    borderRadius: 'var(--radius)', color: tab === t ? 'var(--text)' : 'var(--text-muted)',
+                    padding: '3px 10px', fontSize: 11, cursor: 'pointer', fontWeight: tab === t ? 600 : 400,
+                  }}>
+                    {count > 0 ? `${label} (${count})` : label}
+                  </button>
+                )
+              })}
             </div>
             <button onClick={load} disabled={loading} style={{
               background: 'none', border: '1px solid var(--border)', borderRadius: 'var(--radius)',
@@ -324,6 +379,7 @@ export default function PaperTradingPanel() {
             <>
               <SummaryBar summary={summary} />
               {tab === 'open'    && <OpenTab    trades={trades} onClose={load} />}
+              {tab === 'pending' && <PendingTab pending={pending} />}
               {tab === 'history' && <HistoryTab trades={trades} />}
               {tab === 'summary' && <SummaryTab summary={summary} />}
             </>

@@ -52,7 +52,7 @@ class PaperTrade(BaseModel):
     direction: str  # "long" | "short"
     trade_type: str  # "intraday_cash" | "swing"
     shares: int
-    entry_price: float
+    entry_price: float  # actual fill price; equals limit_price until filled
     target_price: float
     stop_loss: float
     expected_gain: float
@@ -61,9 +61,12 @@ class PaperTrade(BaseModel):
     confidence: str
     rationale: str
     setup_type: str
-    entry_time: str  # ISO 8601 timestamp
-    status: str  # "open" | "closed" | "stopped" | "expired"
+    status: str  # "pending" | "open" | "closed" | "expired"
     mode: str  # "paper" | "live"
+    limit_price: float | None = None     # Claude's suggested entry; set at placement
+    pending_since: str | None = None     # ISO timestamp when order was queued
+    entry_time: str | None = None        # ISO timestamp when order filled
+    entry_slippage: float | None = None  # entry_price - limit_price at fill
     exit_price: float | None = None
     exit_time: str | None = None
     realized_pnl: float | None = None

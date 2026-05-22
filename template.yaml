@@ -153,7 +153,7 @@ Resources:
         MarketHours:
           Type: Schedule
           Properties:
-            Schedule: cron(*/5 13-20 ? * MON-FRI *)
+            Schedule: cron(*/1 13-20 ? * MON-FRI *)
 
   # End of day — 3:45pm ET (20:45 UTC)
   EndOfDayFunction:

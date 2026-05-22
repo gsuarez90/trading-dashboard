@@ -34,6 +34,15 @@ def open_trade(request: OpenTradeRequest):
         raise HTTPException(status_code=502, detail=f"Open trade failed: {e}")
 
 
+@router.get("/pending")
+def list_pending(date: str = Query(default=None)):
+    try:
+        today = date or date_type.today().isoformat()
+        return dynamo_service.get_pending_trades_for_date(today)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"List pending failed: {e}")
+
+
 @router.get("/summary", response_model=DailyCashSummary)
 def get_summary(date: str = Query(default=None)):
     try:

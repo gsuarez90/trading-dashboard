@@ -17,10 +17,11 @@ def open_trade(
     allow_loss: bool = False,
     now: datetime | None = None,
 ) -> PaperTrade:
-    """Run guardrails, then persist a new trade record.
+    """Run guardrails, then queue a pending order.
 
-    now is injectable so tests can control market-hours checks without hitting
-    real wall-clock time.
+    The order sits as status='pending' until the price monitor sees the fill
+    condition met (long: price <= limit_price; short: price >= limit_price).
+    now is injectable so tests can control market-hours checks.
     """
     now_et = (
         (now.replace(tzinfo=ET) if now.tzinfo is None else now.astimezone(ET))
@@ -72,12 +73,47 @@ def open_trade(
         confidence=setup.confidence,
         rationale=setup.rationale,
         setup_type=setup.setup_type,
-        entry_time=now_et.isoformat(),
-        status="open",
+        status="pending",
         mode=trading_mode,
+        limit_price=setup.entry_price,
+        pending_since=now_et.isoformat(),
     )
     dynamo_service.put_trade(trade)
     return trade
+
+
+def fill_pending_order(trade_id: str, fill_price: float) -> dict:
+    """Flip a pending order to open at the actual fill price."""
+    trade = dynamo_service.get_trade(trade_id)
+    if trade is None:
+        raise ValueError(f"Trade {trade_id} not found")
+    if trade.get("status") != "pending":
+        raise ValueError(f"Trade {trade_id} is not pending")
+
+    limit_price = trade.get("limit_price") or trade.get("entry_price", fill_price)
+    slippage = round(fill_price - limit_price, 4)
+
+    updates = {
+        "status": "open",
+        "entry_price": fill_price,
+        "entry_slippage": slippage,
+        "entry_time": datetime.now(tz=ET).isoformat(),
+    }
+    dynamo_service.update_trade(trade_id, updates)
+    return {**trade, **updates}
+
+
+def expire_unfilled_orders(today: str) -> int:
+    """Mark all pending orders for today as expired. Called by EOD handler."""
+    pending = dynamo_service.get_pending_trades_for_date(today)
+    count = 0
+    for trade in pending:
+        try:
+            dynamo_service.update_trade(trade["trade_id"], {"status": "expired"})
+            count += 1
+        except Exception:
+            pass
+    return count
 
 
 def close_trade(trade_id: str, exit_price: float, close_reason: str = "manual") -> dict:
