@@ -1,7 +1,10 @@
 import os
-from datetime import date as date_type
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query
+
+ET = ZoneInfo("America/New_York")
 from pydantic import BaseModel
 
 from models.schemas import DailyCashSummary, PaperTrade, TradeSetup
@@ -34,7 +37,7 @@ def log_trade(request: LogTradeRequest):
 @router.get("/summary", response_model=DailyCashSummary)
 def get_summary(date: str = Query(default=None)):
     try:
-        today = date or date_type.today().isoformat()
+        today = date or datetime.now(tz=ET).strftime("%Y-%m-%d")
         return live_tracking_service.get_live_summary(today)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Summary failed: {e}")
@@ -43,7 +46,7 @@ def get_summary(date: str = Query(default=None)):
 @router.get("/")
 def list_trades(date: str = Query(default=None)):
     try:
-        today = date or date_type.today().isoformat()
+        today = date or datetime.now(tz=ET).strftime("%Y-%m-%d")
         trades = dynamo_service.get_trades_by_date(today)
         return [t for t in trades if t.get("mode") == "live"]
     except Exception as e:

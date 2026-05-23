@@ -22,7 +22,7 @@ def _login():
         username=creds["username"],
         password=creds["password"],
         expiresIn=86400,
-        store_session=True,
+        store_session=False,
     )
 
 

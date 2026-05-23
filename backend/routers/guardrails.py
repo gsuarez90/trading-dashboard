@@ -1,7 +1,10 @@
 import os
-from datetime import date as date_type
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query
+
+ET = ZoneInfo("America/New_York")
 
 from services import dynamo_service, guardrail_service
 from services.guardrail_service import GuardrailContext
@@ -10,7 +13,7 @@ router = APIRouter(prefix="/guardrails", tags=["guardrails"])
 
 
 def _build_context(**overrides) -> GuardrailContext:
-    today = date_type.today().isoformat()
+    today = datetime.now(tz=ET).strftime("%Y-%m-%d")
     return GuardrailContext(
         cash=overrides.get("cash", 0.0),
         realized_pnl_today=dynamo_service.get_realized_pnl_today(today),
@@ -31,7 +34,7 @@ def get_status():
 @router.get("/events")
 def get_events(date: str = Query(default=None)):
     try:
-        today = date or date_type.today().isoformat()
+        today = date or datetime.now(tz=ET).strftime("%Y-%m-%d")
         return dynamo_service.get_guardrail_events_by_date(today)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Guardrail events failed: {e}")
