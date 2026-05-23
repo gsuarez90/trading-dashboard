@@ -25,7 +25,7 @@ def _login():
         username=creds["username"],
         password=creds["password"],
         expiresIn=86400,
-        store_session=False,
+        store_session=True,
     )
 
 
