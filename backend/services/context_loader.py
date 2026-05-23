@@ -111,16 +111,9 @@ def _prev_weekday(d: date) -> date:
     return d
 
 
-def _cached_scanner_results(min_change_pct: float) -> list[dict] | None:
-    """Return DynamoDB-cached scanner data if written on or after the last refresh date.
-
-    Duplicates cache_service._last_refresh_date logic to avoid circular import
-    (cache_service imports context_loader, so the reverse is not possible).
-    """
+def _cache_is_fresh(cached_at: str) -> bool:
+    """True if cached_at is on or after the last expected 9:35am ET weekday refresh."""
     try:
-        data, cached_at = dynamo_service.get_cache("scanner")
-        if data is None or not cached_at:
-            return None
         ts = datetime.fromisoformat(cached_at).astimezone(ET)
         now_et = datetime.now(tz=ET)
         d = now_et.date()
@@ -132,9 +125,33 @@ def _cached_scanner_results(min_change_pct: float) -> list[dict] | None:
             last_refresh = d - timedelta(days=1)
         else:
             last_refresh = d - timedelta(days=2)
-        if ts.date() < last_refresh:
+        return ts.date() >= last_refresh
+    except Exception:
+        return False
+
+
+def _cached_scanner_results(min_change_pct: float) -> list[dict] | None:
+    """Return DynamoDB-cached scanner data if written on or after the last refresh date.
+
+    Duplicates cache_service._last_refresh_date logic to avoid circular import
+    (cache_service imports context_loader, so the reverse is not possible).
+    """
+    try:
+        data, cached_at = dynamo_service.get_cache("scanner")
+        if data is None or not cached_at or not _cache_is_fresh(cached_at):
             return None
         return [m for m in data if abs(m.get("change_pct", 0)) >= min_change_pct]
+    except Exception:
+        return None
+
+
+def _cached_sentiment() -> list[dict] | None:
+    """Return DynamoDB-cached sentiment scores if written on or after the last refresh date."""
+    try:
+        data, cached_at = dynamo_service.get_cache("sentiment")
+        if data is None or not cached_at or not _cache_is_fresh(cached_at):
+            return None
+        return data
     except Exception:
         return None
 
@@ -199,6 +216,9 @@ def load_context(
 
     def _fetch_movers():
         try:
+            cached = _cached_scanner_results(min_change_pct=0)
+            if cached is not None:
+                return sorted(cached, key=lambda m: abs(m.get("change_pct", 0)), reverse=True)[:10]
             return market_data_service.get_previous_day_movers(tickers, limit=10)
         except Exception:
             return []
@@ -243,6 +263,9 @@ def load_context(
 
     def _fetch_sentiment():
         try:
+            cached = _cached_sentiment()
+            if cached is not None:
+                return cached
             return finnhub_service.score_batch_sentiment(sentiment_tickers)
         except Exception:
             return []

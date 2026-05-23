@@ -193,6 +193,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: main.handler
+      MemorySize: 1536
       Policies:
         - !Ref DynamoPolicy
         - !Ref SecretsPolicy
@@ -242,6 +243,7 @@ Resources:
     Properties:
       Handler: main.refresh_handler
       Timeout: 120
+      MemorySize: 1536
       Policies:
         - !Ref DynamoPolicy
         - !Ref SecretsPolicy
