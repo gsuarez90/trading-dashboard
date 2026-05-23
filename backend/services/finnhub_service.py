@@ -1,5 +1,8 @@
 import os
-from datetime import date, timedelta
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+ET = ZoneInfo("America/New_York")
 
 import finnhub
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
@@ -72,7 +75,7 @@ def get_company_news(ticker: str, days: int = 7) -> list[dict]:
 
     Returns articles sorted newest-first, trimmed to the fields Claude needs.
     """
-    today = date.today()
+    today = datetime.now(tz=ET).date()
     from_date = (today - timedelta(days=days)).isoformat()
     to_date = today.isoformat()
 
