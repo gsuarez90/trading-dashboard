@@ -24,7 +24,7 @@ export default function DailySummaryPanel() {
 
   return (
     <div className="panel">
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: expanded ? 12 : 0 }}>
+      <div className="panel-header" style={{ marginBottom: expanded ? 12 : 0 }}>
         <button onClick={() => setExpanded(e => !e)} style={{
           background: 'none', border: 'none', cursor: 'pointer',
           display: 'flex', alignItems: 'center', gap: 6, padding: 0,

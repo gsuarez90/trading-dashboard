@@ -80,3 +80,53 @@ tr:hover td { background: #1c2128; }
 
 .status { color: var(--text-muted); font-size: 13px; padding: 8px 0; }
 .error  { color: var(--red); font-size: 13px; padding: 8px 0; }
+
+/* ── Responsive layout ───────────────────────────────────────────────────────── */
+
+.grid-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.price-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+@media (max-width: 768px) {
+  .panel {
+    padding: 12px;
+  }
+
+  .grid-2col {
+    grid-template-columns: 1fr;
+  }
+
+  .panel-header {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .status-cards {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+
+  .price-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

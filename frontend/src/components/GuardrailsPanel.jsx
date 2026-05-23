@@ -59,7 +59,7 @@ function StatusCards({ status }) {
   ]
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 16 }}>
+    <div className="status-cards" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 16 }}>
       {cards.map(({ label, value, sub, ok }) => (
         <div key={label} style={{
           background: 'var(--surface)', borderRadius: 'var(--radius)',
@@ -216,7 +216,7 @@ export default function GuardrailsPanel() {
 
   return (
     <div className="panel">
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: expanded ? 14 : 0 }}>
+      <div className="panel-header" style={{ marginBottom: expanded ? 14 : 0 }}>
         <button onClick={toggleExpand} style={{
           background: 'none', border: 'none', cursor: 'pointer',
           display: 'flex', alignItems: 'center', gap: 6, padding: 0,

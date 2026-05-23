@@ -32,30 +32,32 @@ export default function SentimentFeed() {
       )}
 
       {rows.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              <th>Ticker</th>
-              <th>Score</th>
-              <th>Label</th>
-              <th>Articles</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(r => (
-              <tr key={r.ticker}>
-                <td><strong>{r.ticker}</strong></td>
-                <td className={labelClass(r.label)}>{r.score?.toFixed(4)}</td>
-                <td>
-                  <span className={`badge badge-${r.label === 'bullish' ? 'positive' : r.label === 'bearish' ? 'negative' : 'neutral'}`}>
-                    {r.label}
-                  </span>
-                </td>
-                <td>{r.article_count}</td>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Ticker</th>
+                <th>Score</th>
+                <th>Label</th>
+                <th>Articles</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.ticker}>
+                  <td><strong>{r.ticker}</strong></td>
+                  <td className={labelClass(r.label)}>{r.score?.toFixed(4)}</td>
+                  <td>
+                    <span className={`badge badge-${r.label === 'bullish' ? 'positive' : r.label === 'bearish' ? 'negative' : 'neutral'}`}>
+                      {r.label}
+                    </span>
+                  </td>
+                  <td>{r.article_count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )

@@ -28,7 +28,7 @@ export default function ScannerPanel() {
 
   return (
     <div className="panel">
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+      <div className="panel-header" style={{ marginBottom: 12 }}>
         <h2 style={{ margin: 0 }}>Scanner — Top Movers</h2>
         <button onClick={load} disabled={loading} style={{
           background: 'none', border: '1px solid var(--border)', borderRadius: 'var(--radius)',
@@ -46,32 +46,34 @@ export default function ScannerPanel() {
       )}
 
       {movers.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              <th>Ticker</th>
-              <th>Price</th>
-              <th>Change %</th>
-              <th>Volume</th>
-              <th>High</th>
-              <th>Low</th>
-            </tr>
-          </thead>
-          <tbody>
-            {movers.map(m => (
-              <tr key={m.ticker}>
-                <td><strong>{m.ticker}</strong></td>
-                <td>${m.price?.toFixed(2)}</td>
-                <td className={m.change_pct >= 0 ? 'up' : 'down'}>
-                  {m.change_pct >= 0 ? '+' : ''}{m.change_pct?.toFixed(2)}%
-                </td>
-                <td>{m.volume?.toLocaleString()}</td>
-                <td>${m.high?.toFixed(2)}</td>
-                <td>${m.low?.toFixed(2)}</td>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Ticker</th>
+                <th>Price</th>
+                <th>Change %</th>
+                <th>Volume</th>
+                <th>High</th>
+                <th>Low</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {movers.map(m => (
+                <tr key={m.ticker}>
+                  <td><strong>{m.ticker}</strong></td>
+                  <td>${m.price?.toFixed(2)}</td>
+                  <td className={m.change_pct >= 0 ? 'up' : 'down'}>
+                    {m.change_pct >= 0 ? '+' : ''}{m.change_pct?.toFixed(2)}%
+                  </td>
+                  <td>{m.volume?.toLocaleString()}</td>
+                  <td>${m.high?.toFixed(2)}</td>
+                  <td>${m.low?.toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )
