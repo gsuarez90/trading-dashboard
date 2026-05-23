@@ -1,4 +1,6 @@
-from fastapi import APIRouter, HTTPException
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Query
 
 from services import portfolio_factory, schwab_service
 
@@ -42,9 +44,9 @@ def _enrich_positions(positions: list[dict]) -> list[dict]:
 
 
 @router.get("/")
-def get_portfolio():
+def get_portfolio(mode: Optional[str] = Query(default=None)):
     try:
-        portfolio = portfolio_factory.get_provider().get_portfolio()
+        portfolio = portfolio_factory.get_provider(mode=mode).get_portfolio()
         portfolio["positions"] = _enrich_positions(portfolio.get("positions", []))
         return portfolio
     except Exception as e:
@@ -52,8 +54,8 @@ def get_portfolio():
 
 
 @router.get("/cash")
-def get_cash():
+def get_cash(mode: Optional[str] = Query(default=None)):
     try:
-        return {"cash": portfolio_factory.get_provider().get_cash()}
+        return {"cash": portfolio_factory.get_provider(mode=mode).get_cash()}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Portfolio fetch failed: {e}")

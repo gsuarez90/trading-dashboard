@@ -7,14 +7,15 @@ class PortfolioProvider(Protocol):
     def get_cash(self) -> float: ...
 
 
-def get_provider():
-    """Returns the portfolio provider module for the current PORTFOLIO_MODE.
+def get_provider(mode: str | None = None):
+    """Returns the portfolio provider module.
 
+    mode param (from request) takes precedence over PORTFOLIO_MODE env var.
     PORTFOLIO_MODE=synthetic  → static demo data, no credentials needed
     PORTFOLIO_MODE=live       → live Robinhood account via robin_stocks
     """
-    mode = os.environ.get("PORTFOLIO_MODE", "synthetic").lower()
-    if mode == "live":
+    resolved = (mode or os.environ.get("PORTFOLIO_MODE", "synthetic")).lower()
+    if resolved == "live":
         from services import robinhood_service
 
         return robinhood_service

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 const API = import.meta.env.VITE_API_URL || '/api'
+const MODE = import.meta.env.VITE_PORTFOLIO_MODE || 'synthetic'
 const POLL_INTERVAL = 90_000
 
 export default function PortfolioView() {
@@ -11,7 +12,7 @@ export default function PortfolioView() {
   const load = useCallback(() => {
     setLoading(true)
     setError(null)
-    fetch(`${API}/portfolio/`)
+    fetch(`${API}/portfolio/?mode=${MODE}`)
       .then(r => r.ok ? r.json() : r.json().then(b => Promise.reject(b.detail || r.statusText)))
       .then(data => { setPortfolio(data); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })

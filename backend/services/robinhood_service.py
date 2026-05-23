@@ -1,12 +1,26 @@
+import json
 import os
 
+import boto3
 import robin_stocks.robinhood as rh
 
 
+def _get_credentials() -> dict:
+    username = os.environ.get("ROBINHOOD_USERNAME")
+    password = os.environ.get("ROBINHOOD_PASSWORD")
+    if username and password:
+        return {"username": username, "password": password}
+    region = os.environ.get("AWS_REGION", "us-east-1")
+    client = boto3.client("secretsmanager", region_name=region)
+    raw = client.get_secret_value(SecretId="/trading-app/robinhood-credentials")["SecretString"]
+    return json.loads(raw)
+
+
 def _login():
+    creds = _get_credentials()
     rh.login(
-        username=os.environ["ROBINHOOD_USERNAME"],
-        password=os.environ["ROBINHOOD_PASSWORD"],
+        username=creds["username"],
+        password=creds["password"],
         expiresIn=86400,
         store_session=True,
     )
