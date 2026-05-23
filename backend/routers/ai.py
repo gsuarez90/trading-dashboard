@@ -52,10 +52,7 @@ def get_briefing():
 def get_sentiment():
     try:
         cached = cache_service.get_cached_sentiment()
-        if cached is not None:
-            return {"sentiment": cached}
-        ctx = load_context()
-        return {"sentiment": ctx.sentiment}
+        return {"sentiment": cached or []}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Sentiment failed: {e}")
 
