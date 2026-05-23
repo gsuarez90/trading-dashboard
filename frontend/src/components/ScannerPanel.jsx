@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { getMarketStatus } from '../utils/market'
 
 const API = import.meta.env.VITE_API_URL || '/api'
 const POLL_INTERVAL = 60_000
@@ -44,6 +45,15 @@ export default function ScannerPanel() {
       {!loading && !error && movers.length === 0 && (
         <p className="status">No movers found.</p>
       )}
+
+      {!loading && !error && movers.length > 0 && (() => {
+        const { open, closedRange } = getMarketStatus()
+        return !open ? (
+          <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
+            Last trading day data — market closed{closedRange ? ` (${closedRange})` : ''}.
+          </p>
+        ) : null
+      })()}
 
       {movers.length > 0 && (
         <div className="table-wrap">

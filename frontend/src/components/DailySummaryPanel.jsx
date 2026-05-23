@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { getMarketStatus } from '../utils/market'
 
 const API = import.meta.env.VITE_API_URL || '/api'
 
@@ -63,11 +64,18 @@ export default function DailySummaryPanel() {
       {expanded && (
         <>
           {error && <p className="error">Error: {error}</p>}
-          {!error && data && (
+          {!error && data && data.briefing && (
             <p style={{ whiteSpace: 'pre-wrap', lineHeight: 1.7, fontSize: 13, color: 'var(--text)' }}>
               {data.briefing}
             </p>
           )}
+          {!error && data && !data.briefing && (() => {
+            const { isTodayTradingDay, nextOpenDate } = getMarketStatus()
+            const msg = isTodayTradingDay
+              ? 'Market closed — new briefing at market open (~9:35 AM ET).'
+              : `Market closed — next briefing ${nextOpenDate}, ~9:35 AM ET.`
+            return <p className="status">{msg}</p>
+          })()}
           {loading && <p className="status">Loading…</p>}
         </>
       )}

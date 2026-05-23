@@ -7,7 +7,7 @@ Three scheduled jobs:
   run_end_of_day()      — 3:45pm ET: close all open paper trades, flag live trades
 """
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from services import claude_service, dynamo_service, finnhub_service, schwab_service
@@ -19,13 +19,42 @@ ET = ZoneInfo("America/New_York")
 
 # ── Cache helpers ─────────────────────────────────────────────────────────────
 
+
+def _last_refresh_date() -> date:
+    """Date of the most recent expected 9:35am ET weekday refresh.
+
+    Used to determine whether cached data is still valid across weekends and
+    Monday pre-market (before the 9:35am refresh fires).
+    """
+    now_et = datetime.now(tz=ET)
+    d = now_et.date()
+    wd = d.weekday()  # Mon=0 … Fri=4, Sat=5, Sun=6
+    if wd < 5:  # Weekday
+        h, m = now_et.hour, now_et.minute
+        if h > 9 or (h == 9 and m >= 35):
+            return d  # Today's 9:35am refresh has already run
+        # Before 9:35am — last refresh was the previous weekday
+        d -= timedelta(days=1)
+        while d.weekday() >= 5:
+            d -= timedelta(days=1)
+        return d
+    elif wd == 5:  # Saturday
+        return d - timedelta(days=1)  # Friday
+    else:  # Sunday
+        return d - timedelta(days=2)  # Friday
+
+
 def _cache_is_fresh(cached_at: str | None) -> bool:
-    """True if the cache was written today (ET)."""
+    """True if the cache was written on or after the last expected refresh date.
+
+    Replaces the previous today-only check so Friday's cache remains valid
+    through the weekend and Monday pre-market (before the 9:35am refresh fires).
+    """
     if not cached_at:
         return False
     try:
         ts = datetime.fromisoformat(cached_at).astimezone(ET)
-        return ts.date() == datetime.now(tz=ET).date()
+        return ts.date() >= _last_refresh_date()
     except Exception:
         return False
 
@@ -56,6 +85,7 @@ def get_cached_briefing() -> dict | None:
 
 
 # ── Lambda handlers ───────────────────────────────────────────────────────────
+
 
 def run_daily_refresh() -> dict:
     """7:00am ET — pre-compute scanner + sentiment and write to DynamoDB cache."""
@@ -159,7 +189,7 @@ def run_price_monitor() -> dict:
         mode = trade.get("mode", "paper")
 
         hit_target = (price >= target) if direction == "long" else (price <= target)
-        hit_stop   = (price <= stop)   if direction == "long" else (price >= stop)
+        hit_stop = (price <= stop) if direction == "long" else (price >= stop)
 
         close_reason = None
         if hit_target:
@@ -178,12 +208,15 @@ def run_price_monitor() -> dict:
                 pass
         else:
             try:
-                dynamo_service.update_trade(trade["trade_id"], {
-                    "flagged_for_manual_close": True,
-                    "flag_reason": close_reason,
-                    "flag_price": price,
-                    "flag_time": now_iso,
-                })
+                dynamo_service.update_trade(
+                    trade["trade_id"],
+                    {
+                        "flagged_for_manual_close": True,
+                        "flag_reason": close_reason,
+                        "flag_price": price,
+                        "flag_time": now_iso,
+                    },
+                )
                 flagged += 1
             except Exception:
                 pass
@@ -231,11 +264,14 @@ def run_end_of_day() -> dict:
                 pass
         else:
             try:
-                dynamo_service.update_trade(trade["trade_id"], {
-                    "flagged_for_manual_close": True,
-                    "flag_reason": "eod_close",
-                    "flag_time": now_iso,
-                })
+                dynamo_service.update_trade(
+                    trade["trade_id"],
+                    {
+                        "flagged_for_manual_close": True,
+                        "flag_reason": "eod_close",
+                        "flag_time": now_iso,
+                    },
+                )
                 live_flagged += 1
             except Exception:
                 pass

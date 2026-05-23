@@ -235,7 +235,8 @@ Resources:
           Properties:
             Schedule: cron(45 20 ? * MON-FRI *)
 
-  # Daily 7am ET refresh — scanner + sentiment + briefing → DynamoDB cache (12:00 UTC)
+  # Daily 9:35am ET refresh — scanner + sentiment + briefing → DynamoDB cache (13:35 UTC, Mon-Fri)
+  # Runs after market open so _get_watchlist() returns live movers instead of _DEFAULT_TICKERS.
   DailyRefreshFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -249,7 +250,7 @@ Resources:
         DailyTrigger:
           Type: Schedule
           Properties:
-            Schedule: cron(0 12 * * ? *)
+            Schedule: cron(35 13 ? * MON-FRI *)
 
   # Nightly analytics — Phase 2 (stub, not active)
   AnalyticsFunction:

@@ -20,29 +20,23 @@ class SuggestTradesRequest(BaseModel):
 @router.get("/briefing")
 def get_briefing():
     try:
-        # Serve cached briefing text — minutes_remaining is always computed live
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from services.context_loader import _minutes_remaining
+
+        now_et = datetime.now(tz=ZoneInfo("America/New_York"))
         cached = cache_service.get_cached_briefing()
         if cached:
-            from services.context_loader import _minutes_remaining
-            from datetime import datetime
-            from zoneinfo import ZoneInfo
-            mins = _minutes_remaining(datetime.now(tz=ZoneInfo("America/New_York")))
             return {
                 "briefing": cached["briefing"],
                 "date": cached["date"],
-                "minutes_remaining": mins,
+                "minutes_remaining": _minutes_remaining(now_et),
             }
-        ctx = load_context()
-        briefing = claude_service.morning_briefing(ctx)
-        try:
-            from services import dynamo_service
-            dynamo_service.put_cache("briefing", {"briefing": briefing, "date": ctx.date})
-        except Exception:
-            pass  # non-fatal — cache write failure doesn't break the response
+        # No cache — return null rather than calling load_context() + Claude (timeout risk)
         return {
-            "briefing": briefing,
-            "date": ctx.date,
-            "minutes_remaining": ctx.minutes_remaining,
+            "briefing": None,
+            "date": now_et.strftime("%Y-%m-%d"),
+            "minutes_remaining": _minutes_remaining(now_et),
         }
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Briefing failed: {e}")

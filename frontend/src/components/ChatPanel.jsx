@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { getMarketStatus } from '../utils/market'
 
 const API = import.meta.env.VITE_API_URL || '/api'
 
@@ -133,6 +134,7 @@ function SuggestTab() {
   const [loading, setLoading]   = useState(false)
   const [error, setError]       = useState(null)
   const [allowLoss, setAllowLoss] = useState(false)
+  const { open: marketOpen, closedRange } = getMarketStatus()
 
   function fetchSuggestions() {
     setLoading(true)
@@ -149,6 +151,15 @@ function SuggestTab() {
 
   return (
     <div>
+      {!marketOpen && (
+        <div style={{
+          background: '#1a1a2a', border: '1px solid var(--border)',
+          borderRadius: 'var(--radius)', padding: '8px 12px', marginBottom: 12,
+          fontSize: 11, color: 'var(--text-muted)',
+        }}>
+          Market closed{closedRange ? ` (${closedRange})` : ''} — suggestions use last cached context.
+        </div>
+      )}
       {/* controls */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
         <button onClick={fetchSuggestions} disabled={loading} style={{

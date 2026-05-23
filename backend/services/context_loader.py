@@ -1,10 +1,16 @@
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
-from datetime import datetime, time
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from services import dynamo_service, finnhub_service, market_data_service, portfolio_factory, schwab_service
+from services import (
+    dynamo_service,
+    finnhub_service,
+    market_data_service,
+    portfolio_factory,
+    schwab_service,
+)
 from services.guardrail_service import GuardrailContext, get_status
 
 ET = ZoneInfo("America/New_York")
@@ -98,19 +104,54 @@ def _enrich_positions(positions: list[dict]) -> list[dict]:
     return enriched
 
 
+def _prev_weekday(d: date) -> date:
+    d -= timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
+def _cached_scanner_results(min_change_pct: float) -> list[dict] | None:
+    """Return DynamoDB-cached scanner data if written on or after the last refresh date.
+
+    Duplicates cache_service._last_refresh_date logic to avoid circular import
+    (cache_service imports context_loader, so the reverse is not possible).
+    """
+    try:
+        data, cached_at = dynamo_service.get_cache("scanner")
+        if data is None or not cached_at:
+            return None
+        ts = datetime.fromisoformat(cached_at).astimezone(ET)
+        now_et = datetime.now(tz=ET)
+        d = now_et.date()
+        wd = d.weekday()
+        if wd < 5:
+            h, m = now_et.hour, now_et.minute
+            last_refresh = d if (h > 9 or (h == 9 and m >= 35)) else _prev_weekday(d)
+        elif wd == 5:
+            last_refresh = d - timedelta(days=1)
+        else:
+            last_refresh = d - timedelta(days=2)
+        if ts.date() < last_refresh:
+            return None
+        return [m for m in data if abs(m.get("change_pct", 0)) >= min_change_pct]
+    except Exception:
+        return None
+
+
 def _get_watchlist() -> list[str]:
-    # Explicit override via env var always wins
     raw = os.environ.get("WATCHLIST", "")
     if raw:
         return [t.strip().upper() for t in raw.split(",") if t.strip()]
-    # Dynamic: top movers across SPX, Nasdaq, Dow via Schwab
-    try:
-        dynamic = schwab_service.get_dynamic_watchlist()
-        if dynamic:
-            return dynamic
-    except Exception:
-        pass
-    # Static fallback if Schwab is unavailable
+    # Movers API only has meaningful data during market hours; outside hours it can
+    # hang indefinitely (no timeout on the underlying HTTP client) causing Lambda 503s.
+    if _minutes_remaining(datetime.now(tz=ET)) > 0:
+        try:
+            dynamic = schwab_service.get_dynamic_watchlist()
+            if dynamic:
+                return dynamic
+        except Exception:
+            pass
     return _DEFAULT_TICKERS
 
 
@@ -149,6 +190,9 @@ def load_context(
 
     def _fetch_scanner():
         try:
+            cached = _cached_scanner_results(min_change_pct)
+            if cached is not None:
+                return cached
             return market_data_service.get_scanner_results(tickers, min_change_pct=min_change_pct)
         except Exception:
             return []
@@ -172,16 +216,16 @@ def load_context(
             return []
 
     with ThreadPoolExecutor(max_workers=5) as pool:
-        f_portfolio       = pool.submit(_fetch_portfolio)
-        f_scanner         = pool.submit(_fetch_scanner)
-        f_movers          = pool.submit(_fetch_movers)
-        f_trades          = pool.submit(_fetch_trades)
+        f_portfolio = pool.submit(_fetch_portfolio)
+        f_scanner = pool.submit(_fetch_scanner)
+        f_movers = pool.submit(_fetch_movers)
+        f_trades = pool.submit(_fetch_trades)
         f_guardrail_events = pool.submit(_fetch_guardrail_events)
 
-    portfolio       = f_portfolio.result()
+    portfolio = f_portfolio.result()
     scanner_results = f_scanner.result()
-    top_movers      = f_movers.result()
-    trades_today    = f_trades.result()
+    top_movers = f_movers.result()
+    trades_today = f_trades.result()
     guardrail_events = f_guardrail_events.result()
 
     cash = float(portfolio.get("cash", 0.0))
@@ -204,7 +248,7 @@ def load_context(
             return []
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        f_enriched  = pool.submit(_enrich)
+        f_enriched = pool.submit(_enrich)
         f_sentiment = pool.submit(_fetch_sentiment)
 
     portfolio["positions"] = f_enriched.result()
