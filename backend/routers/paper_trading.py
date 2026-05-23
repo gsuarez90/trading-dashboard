@@ -1,7 +1,10 @@
 import os
-from datetime import date as date_type
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query
+
+ET = ZoneInfo("America/New_York")
 from pydantic import BaseModel
 
 from models.schemas import DailyCashSummary, PaperTrade, TradeSetup
@@ -37,7 +40,7 @@ def open_trade(request: OpenTradeRequest):
 @router.get("/pending")
 def list_pending(date: str = Query(default=None)):
     try:
-        today = date or date_type.today().isoformat()
+        today = date or datetime.now(tz=ET).strftime("%Y-%m-%d")
         return dynamo_service.get_pending_trades_for_date(today)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"List pending failed: {e}")
@@ -46,7 +49,7 @@ def list_pending(date: str = Query(default=None)):
 @router.get("/summary", response_model=DailyCashSummary)
 def get_summary(date: str = Query(default=None)):
     try:
-        today = date or date_type.today().isoformat()
+        today = date or datetime.now(tz=ET).strftime("%Y-%m-%d")
         trading_mode = os.environ.get("TRADING_MODE", "paper")
         return paper_trading_service.get_daily_summary(today, trading_mode)
     except Exception as e:
@@ -56,7 +59,7 @@ def get_summary(date: str = Query(default=None)):
 @router.get("/")
 def list_trades(date: str = Query(default=None)):
     try:
-        today = date or date_type.today().isoformat()
+        today = date or datetime.now(tz=ET).strftime("%Y-%m-%d")
         return dynamo_service.get_trades_by_date(today)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"List trades failed: {e}")
