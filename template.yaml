@@ -205,7 +205,7 @@ Resources:
             Method: ANY
             ApiId: !Ref TradingHttpApi
 
-  # Price monitor — every 5 min during market hours (9:30am–4pm ET = 13:30–21:00 UTC)
+  # Price monitor — every 1 min during market hours (9:00am–4:59pm ET = 13:00–20:59 UTC)
   PriceMonitorFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -218,7 +218,7 @@ Resources:
         MarketHours:
           Type: Schedule
           Properties:
-            Schedule: cron(*/5 13-20 ? * MON-FRI *)
+            Schedule: cron(* 13-20 ? * MON-FRI *)
 
   # End of day — 3:45pm ET (20:45 UTC)
   EndOfDayFunction:
