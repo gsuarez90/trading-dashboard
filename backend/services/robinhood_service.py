@@ -4,6 +4,8 @@ import os
 import boto3
 import robin_stocks.robinhood as rh
 
+_authenticated = False
+
 
 def _get_credentials() -> dict:
     username = os.environ.get("ROBINHOOD_USERNAME")
@@ -17,6 +19,9 @@ def _get_credentials() -> dict:
 
 
 def _login():
+    global _authenticated
+    if _authenticated:
+        return
     # robin_stocks unconditionally creates ~/.tokens/ in login() — redirect HOME
     # to /tmp so it uses /tmp/.tokens/ which is writable in Lambda.
     os.environ.setdefault("HOME", "/tmp")
@@ -27,6 +32,7 @@ def _login():
         expiresIn=86400,
         store_session=True,
     )
+    _authenticated = True
 
 
 def get_portfolio() -> dict:
