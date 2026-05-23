@@ -311,9 +311,9 @@ export default function PaperTradingPanel() {
     setLoading(true)
     setError(null)
     Promise.all([
-      fetch(`${API}/paper-trades/`).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
-      fetch(`${API}/paper-trades/pending`).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
-      fetch(`${API}/paper-trades/summary`).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
+      fetch(`${API}/paper-trades/`, { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
+      fetch(`${API}/paper-trades/pending`, { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
+      fetch(`${API}/paper-trades/summary`, { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
     ])
       .then(([t, p, s]) => { setTrades(t); setPending(p); setSummary(s); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })

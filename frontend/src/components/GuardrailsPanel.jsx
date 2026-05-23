@@ -189,8 +189,8 @@ export default function GuardrailsPanel() {
     setLoading(true)
     setError(null)
     Promise.all([
-      fetch(`${API}/guardrails/status`).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
-      fetch(`${API}/guardrails/events`).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
+      fetch(`${API}/guardrails/status`, { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
+      fetch(`${API}/guardrails/events`, { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
     ])
       .then(([s, e]) => { setStatus(s); setEvents(e); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })

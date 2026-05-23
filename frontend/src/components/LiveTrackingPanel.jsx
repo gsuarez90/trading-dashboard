@@ -274,8 +274,8 @@ export default function LiveTrackingPanel() {
     setLoading(true)
     setError(null)
     Promise.all([
-      fetch(`${API}/live-trades/`).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
-      fetch(`${API}/live-trades/summary`).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
+      fetch(`${API}/live-trades/`, { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
+      fetch(`${API}/live-trades/summary`, { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
     ])
       .then(([t, s]) => { setTrades(t); setSummary(s); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })
