@@ -185,20 +185,6 @@ Resources:
 
   TradingHttpApi:
     Type: AWS::Serverless::HttpApi
-    Properties:
-      CorsConfiguration:
-        AllowOrigins:
-          - https://ait.gsuarez.dev
-          - https://degen.gsuarez.dev
-          - http://localhost:5173
-        AllowHeaders:
-          - Content-Type
-          - Authorization
-        AllowMethods:
-          - GET
-          - POST
-          - DELETE
-          - OPTIONS
 
   # ── Lambda functions ──────────────────────────────────────────────────────────
 

@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env.local")  # No-op in Lambda
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
 
 from routers import (
@@ -20,6 +21,13 @@ from routers import (
 from services import cache_service, dynamo_service
 
 app = FastAPI(title="AI Trading Dashboard")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://ait.gsuarez.dev", "https://degen.gsuarez.dev", "http://localhost:5173"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
+)
 
 try:
     dynamo_service.ensure_table_exists()
