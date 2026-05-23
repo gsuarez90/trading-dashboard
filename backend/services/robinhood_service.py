@@ -17,6 +17,9 @@ def _get_credentials() -> dict:
 
 
 def _login():
+    # robin_stocks unconditionally creates ~/.tokens/ in login() — redirect HOME
+    # to /tmp so it uses /tmp/.tokens/ which is writable in Lambda.
+    os.environ.setdefault("HOME", "/tmp")
     creds = _get_credentials()
     rh.login(
         username=creds["username"],
