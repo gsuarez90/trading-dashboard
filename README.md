@@ -15,7 +15,7 @@ The bar before going live: win rate above 55%, R/R above 1.5, beating SPY more t
 | Version | URL | Access |
 |---------|-----|--------|
 | Public demo | [ait.gsuarez.dev](https://ait.gsuarez.dev) | Open to anyone — synthetic portfolio |
-| Private dashboard | [degen.gsuarez.dev](https://degen.gsuarez.dev) | Cloudflare Access — email OTP only |
+| Private dashboard | Not public | Cloudflare Access — email OTP only |
 
 ---
 
@@ -602,7 +602,7 @@ Cloudflare (ait.gsuarez.dev)
 ### Production — Private Version
 
 ```
-Owner visits degen.gsuarez.dev
+Owner visits private dashboard URL
     │
     ▼
 Cloudflare Access
