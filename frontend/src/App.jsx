@@ -28,7 +28,7 @@ export default function App() {
         <ChatPanel />
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+      <div className="grid-2col">
         <ScannerPanel />
         <SentimentFeed />
       </div>

@@ -59,7 +59,7 @@ function SuggestionCard({ trade, isRecommended, allowLoss }) {
       </div>
 
       {/* price grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 10 }}>
+      <div className="price-grid">
         {[
           ['Entry',    `$${trade.entry_price.toFixed(2)}`],
           ['Target',   `$${trade.target_price.toFixed(2)}`],
@@ -309,7 +309,7 @@ export default function ChatPanel() {
 
   return (
     <div className="panel">
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: expanded ? 16 : 0 }}>
+      <div className="panel-header" style={{ marginBottom: expanded ? 16 : 0 }}>
         <button onClick={() => setExpanded(e => !e)} style={{
           background: 'none', border: 'none', cursor: 'pointer',
           display: 'flex', alignItems: 'center', gap: 6, padding: 0,
