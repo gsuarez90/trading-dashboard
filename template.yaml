@@ -300,9 +300,25 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: trading-dashboard-private
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
       WebsiteConfiguration:
         IndexDocument: index.html
         ErrorDocument: index.html
+
+  PrivateFrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref PrivateFrontendBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub '${PrivateFrontendBucket.Arn}/*'
 
   ChartsBucket:
     Type: AWS::S3::Bucket
