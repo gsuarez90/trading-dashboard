@@ -17,6 +17,18 @@ ET = ZoneInfo("America/New_York")
 _MARKET_OPEN = time(9, 30)
 _MARKET_CLOSE = time(16, 0)
 
+# NYSE market holidays — keep in sync with frontend/src/utils/market.js, update annually
+_MARKET_HOLIDAYS = {
+    # 2026
+    date(2026, 1, 1),  date(2026, 1, 19),  date(2026, 2, 16),  date(2026, 4, 3),
+    date(2026, 5, 25), date(2026, 7, 3),   date(2026, 9, 7),   date(2026, 11, 26),
+    date(2026, 12, 25),
+    # 2027
+    date(2027, 1, 1),  date(2027, 1, 18),  date(2027, 2, 15),  date(2027, 3, 26),
+    date(2027, 5, 31), date(2027, 7, 5),   date(2027, 9, 6),   date(2027, 11, 25),
+    date(2027, 12, 24),
+}
+
 # Default watchlist — overridden by WATCHLIST env var (comma-separated tickers)
 _DEFAULT_TICKERS = [
     "AAPL",
@@ -60,7 +72,7 @@ class DailyContext:
 
 
 def _minutes_remaining(now_et: datetime) -> int:
-    if now_et.weekday() >= 5:
+    if now_et.weekday() >= 5 or now_et.date() in _MARKET_HOLIDAYS:
         return 0
     t = now_et.time()
     if t < _MARKET_OPEN or t >= _MARKET_CLOSE:
