@@ -20,7 +20,7 @@ from routers import (
 )
 from services import cache_service, dynamo_service
 
-app = FastAPI(title="AI Trading Dashboard")
+app = FastAPI(title="AI Trading Dashboard", redirect_slashes=False)
 
 app.add_middleware(
     CORSMiddleware,
