@@ -21,12 +21,12 @@ Backend code changes are complete and committed. AWS infrastructure (Steps 1–8
 | `cache_service.py` — `get_cached_live_briefing()`, `store_live_briefing()`, `run_live_briefing_refresh()` | ✅ Done |
 | `ai.py` — `get_briefing()` branches on `PORTFOLIO_MODE`, returns cache-or-null on both paths | ✅ Done |
 | `main.py` — `refresh_live_briefing_handler`, `x-api-key` added to CORS `allow_headers` | ✅ Done |
-| Pre-Task — Investigate portfolio null values on first load | ⬜ Pending |
+| Pre-Task — Investigate portfolio null values on first load | ✅ Done — root cause: `_write(token)` missing `**kwargs` caused TypeError on Schwab token refresh, silently aborting `_enrich_positions()`. Fixed in commit `be30e97`. |
 | Step 1 — Generate UUID API key, store in SSM | ⬜ Pending |
 | Step 2 — `template.yaml` IAM split + private function + DailyRefreshLiveBriefingFunction | ⬜ Pending |
 | Step 3 — `main.py` API key middleware | ⬜ Pending |
 | Step 4a — `frontend/src/utils/api.js` — `apiFetch` utility with trailing-slash strip | ✅ Done |
-| Step 4b — Update 8 components to use `apiFetch` | ⬜ Pending |
+| Step 4b — Update 8 components to use `apiFetch` | ⬜ Pending — all 8 components still use `const API = import.meta.env.VITE_API_URL` |
 | Step 5 — `deploy.yml` `VITE_API_KEY` line | ⬜ Pending |
 | Step 6 — GitHub Secrets | ⬜ Pending |
 | Step 7 — `sam deploy` + capture private API URL | ⬜ Pending |
@@ -335,19 +335,19 @@ TradingDashboardFunction:
       - !Ref SsmApiKeysPolicy
 ```
 
-### 2d. Add `TradingHttpApiPrivate` and `TradingDashboardPrivateFunction`
+### 2d. Add `TradingDashboardPrivateFunction`
 
-Add these two new resources after the existing `TradingDashboardFunction` block:
+Add this resource after the existing `TradingDashboardFunction` block. Uses a Lambda Function URL (same as the public Lambda) — no API Gateway needed. The private API key validation is handled by FastAPI middleware in Step 3, not at the gateway layer.
 
 ```yaml
-TradingHttpApiPrivate:
-  Type: AWS::Serverless::HttpApi
-
 TradingDashboardPrivateFunction:
   Type: AWS::Serverless::Function
   Properties:
     Handler: main.handler
+    Timeout: 120
     MemorySize: 1536
+    FunctionUrlConfig:
+      AuthType: NONE
     Environment:
       Variables:
         PORTFOLIO_MODE: live
@@ -357,13 +357,6 @@ TradingDashboardPrivateFunction:
       - !Ref SchwabSecretsPolicy
       - !Ref RobinhoodSecretsPolicy
       - !Ref SsmApiKeysPolicy
-    Events:
-      Api:
-        Type: HttpApi
-        Properties:
-          Path: /{proxy+}
-          Method: ANY
-          ApiId: !Ref TradingHttpApiPrivate
 ```
 
 ### 2e. Add `DailyRefreshLiveBriefingFunction`
@@ -413,26 +406,15 @@ Policies:
 
 ### 2g. Update `Outputs`
 
-Replace the existing `ApiUrl` output and add a private one:
+Add a `PrivateFunctionUrl` output alongside the existing `FunctionUrl`:
 
-**Before:**
 ```yaml
-Outputs:
-  ApiUrl:
-    Description: API Gateway endpoint URL — use for PUBLIC_API_URL and PRIVATE_API_URL GitHub secrets
-    Value: !Sub 'https://${TradingHttpApi}.execute-api.${AWS::Region}.amazonaws.com'
+PrivateFunctionUrl:
+  Description: Private Lambda Function URL — use for PRIVATE_API_URL GitHub secret
+  Value: !GetAtt TradingDashboardPrivateFunctionUrl.FunctionUrl
 ```
 
-**After:**
-```yaml
-Outputs:
-  PublicApiUrl:
-    Description: Public API Gateway URL — use for PUBLIC_API_URL GitHub secret
-    Value: !Sub 'https://${TradingHttpApi}.execute-api.${AWS::Region}.amazonaws.com'
-  PrivateApiUrl:
-    Description: Private API Gateway URL — use for PRIVATE_API_URL GitHub secret
-    Value: !Sub 'https://${TradingHttpApiPrivate}.execute-api.${AWS::Region}.amazonaws.com'
-```
+`FunctionUrl` (public) already exists from the Lambda Function URL migration. `ApiUrl` (legacy API Gateway) can be removed once the two-Lambda deploy is verified.
 
 ---
 
@@ -609,8 +591,8 @@ SAM will show a changeset preview. Expect to see:
 - `SchwabSecretsPolicy` → ADD
 - `RobinhoodSecretsPolicy` → ADD
 - `TradingDashboardFunction` → MODIFY (policy change)
-- `TradingHttpApiPrivate` → ADD
 - `TradingDashboardPrivateFunction` → ADD
+- `TradingDashboardPrivateFunctionUrl` → ADD
 - `DailyRefreshLiveBriefingFunction` → ADD
 - All other scheduled functions → MODIFY (policy change)
 
@@ -623,7 +605,7 @@ After deploy completes:
 ```powershell
 aws cloudformation describe-stacks `
   --stack-name trading-dashboard `
-  --query "Stacks[0].Outputs[?OutputKey=='PrivateApiUrl'].OutputValue" `
+  --query "Stacks[0].Outputs[?OutputKey=='PrivateFunctionUrl'].OutputValue" `
   --output text
 ```
 
