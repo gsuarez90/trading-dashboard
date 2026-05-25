@@ -44,7 +44,6 @@ def _enrich_positions(positions: list[dict]) -> list[dict]:
 
 
 @router.get("")
-@router.get("/")
 def get_portfolio(mode: Optional[str] = Query(default=None)):
     try:
         portfolio = portfolio_factory.get_provider(mode=mode).get_portfolio()

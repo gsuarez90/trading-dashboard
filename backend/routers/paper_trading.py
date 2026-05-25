@@ -23,8 +23,7 @@ class CloseTradeRequest(BaseModel):
     close_reason: str = "manual"
 
 
-@router.post("")
-@router.post("/", response_model=PaperTrade)
+@router.post("", response_model=PaperTrade)
 def open_trade(request: OpenTradeRequest):
     try:
         cash = portfolio_factory.get_provider().get_cash()
@@ -58,7 +57,6 @@ def get_summary(date: str = Query(default=None)):
 
 
 @router.get("")
-@router.get("/")
 def list_trades(date: str = Query(default=None)):
     try:
         today = date or datetime.now(tz=ET).strftime("%Y-%m-%d")

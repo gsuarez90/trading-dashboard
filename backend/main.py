@@ -7,6 +7,7 @@ load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env.local")  
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
+from starlette.requests import Request
 
 from routers import (
     ai,
@@ -26,8 +27,15 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://ait.gsuarez.dev", "https://degen.gsuarez.dev", "http://localhost:5173"],
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=["Content-Type", "Authorization", "x-api-key"],
 )
+
+@app.middleware("http")
+async def strip_trailing_slash(request: Request, call_next):
+    if request.url.path != "/" and request.url.path.endswith("/"):
+        request.scope["path"] = request.url.path.rstrip("/")
+    return await call_next(request)
+
 
 try:
     dynamo_service.ensure_table_exists()
@@ -63,8 +71,13 @@ def end_of_day_handler(event, context):
 
 
 def refresh_handler(event, context):
-    """7am ET — scanner + sentiment → DynamoDB cache."""
+    """9:35am ET weekdays — scanner + sentiment + synthetic briefing → DynamoDB cache."""
     return cache_service.run_daily_refresh()
+
+
+def refresh_live_briefing_handler(event, context):
+    """9:35am ET weekdays — live briefing with real Robinhood portfolio → DynamoDB cache."""
+    return cache_service.run_live_briefing_refresh()
 
 
 def analytics_handler(event, context):
