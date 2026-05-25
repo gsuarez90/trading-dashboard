@@ -188,12 +188,15 @@ Resources:
 
   # ── Lambda functions ──────────────────────────────────────────────────────────
 
-  # Main API — handles all HTTP requests from CloudFront / API Gateway
+  # Main API — handles all HTTP requests from CloudFront / API Gateway or Function URL
   TradingDashboardFunction:
     Type: AWS::Serverless::Function
     Properties:
       Handler: main.handler
+      Timeout: 120
       MemorySize: 1536
+      FunctionUrlConfig:
+        AuthType: NONE
       Policies:
         - !Ref DynamoPolicy
         - !Ref SecretsPolicy
@@ -370,8 +373,11 @@ Resources:
             ResponsePagePath: /index.html
 
 Outputs:
+  FunctionUrl:
+    Description: Lambda Function URL (no 29s ceiling) — use for PUBLIC_API_URL and PRIVATE_API_URL GitHub secrets
+    Value: !GetAtt TradingDashboardFunctionUrl.FunctionUrl
   ApiUrl:
-    Description: API Gateway endpoint URL — use for PUBLIC_API_URL and PRIVATE_API_URL GitHub secrets
+    Description: API Gateway endpoint URL (legacy — kept for rollback; ceiling is 29s)
     Value: !Sub 'https://${TradingHttpApi}.execute-api.${AWS::Region}.amazonaws.com'
   PublicCloudfrontUrl:
     Description: Public CloudFront distribution URL
