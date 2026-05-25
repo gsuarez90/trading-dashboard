@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -25,14 +27,14 @@ def get_briefing():
         from services.context_loader import _minutes_remaining
 
         now_et = datetime.now(tz=ZoneInfo("America/New_York"))
-        cached = cache_service.get_cached_briefing()
+        is_live = os.environ.get("PORTFOLIO_MODE", "synthetic").lower() == "live"
+        cached = cache_service.get_cached_live_briefing() if is_live else cache_service.get_cached_briefing()
         if cached:
             return {
                 "briefing": cached["briefing"],
                 "date": cached["date"],
                 "minutes_remaining": _minutes_remaining(now_et),
             }
-        # No cache — return null rather than calling load_context() + Claude (timeout risk)
         return {
             "briefing": None,
             "date": now_et.strftime("%Y-%m-%d"),

@@ -84,7 +84,31 @@ def get_cached_briefing() -> dict | None:
     return None
 
 
+def get_cached_live_briefing() -> dict | None:
+    """Return cached live briefing payload {briefing, date} if fresh, else None."""
+    data, cached_at = dynamo_service.get_cache("briefing_live")
+    if data is not None and _cache_is_fresh(cached_at):
+        return data
+    return None
+
+
+def store_live_briefing(briefing_text: str, date: str) -> None:
+    """Write live briefing to DynamoDB cache."""
+    dynamo_service.put_cache("briefing_live", {"briefing": briefing_text, "date": date})
+
+
 # ── Lambda handlers ───────────────────────────────────────────────────────────
+
+
+def run_live_briefing_refresh() -> dict:
+    """9:35am ET weekdays — generate morning briefing with live Robinhood portfolio context."""
+    try:
+        ctx = load_context()
+        briefing_text = claude_service.morning_briefing(ctx)
+        store_live_briefing(briefing_text, ctx.date)
+        return {"refreshed_at": datetime.now(tz=ET).isoformat(), "briefing_cached": True}
+    except Exception as e:
+        return {"refreshed_at": datetime.now(tz=ET).isoformat(), "briefing_cached": False, "error": str(e)}
 
 
 def run_daily_refresh() -> dict:
