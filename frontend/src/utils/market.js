@@ -1,3 +1,6 @@
+import { useEffect, useState } from 'react'
+import { apiFetch } from './api'
+
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
 // NYSE market holidays — update annually (YYYY-MM-DD in ET)
@@ -88,4 +91,22 @@ export function getMarketStatus() {
     isTodayTradingDay,
     nextOpenDate: fmtDate(fwd),
   }
+}
+
+/**
+ * React hook — returns market status, starting from the local calculation
+ * and updating open/closed from the backend once the fetch resolves.
+ * Falls back silently to the local calculation if the backend call fails.
+ */
+export function useMarketStatus() {
+  const [status, setStatus] = useState(() => getMarketStatus())
+
+  useEffect(() => {
+    apiFetch('/market/status')
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(({ is_open }) => setStatus(prev => ({ ...prev, open: is_open })))
+      .catch(() => {})
+  }, [])
+
+  return status
 }

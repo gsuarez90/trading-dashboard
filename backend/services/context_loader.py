@@ -31,7 +31,7 @@ _DEFAULT_TICKERS = [
     "AMD",
     "NFLX",
     "ORCL",
-    "BTC/USD",
+    "CRM",
     "PLTR",
 ]
 

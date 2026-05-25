@@ -193,7 +193,33 @@ except Exception as e:
 
 # ── 6. CORS preflight (OPTIONS) ───────────────────────────────────────────────
 
-section("6. CORS preflight OPTIONS — /portfolio/")
+section("6. Market status — /market/status")
+t0 = time.time()
+try:
+    r = httpx.get(
+        f"{BASE}/market/status",
+        headers={"Origin": ORIGIN},
+        follow_redirects=True,
+        timeout=10,
+    )
+    elapsed = time.time() - t0
+    print(f"  {elapsed:.2f}s")
+    show_response(r)
+    if r.status_code == 200:
+        body = r.json()
+        is_open = body.get("is_open")
+        date    = body.get("date")
+        print(f"\n  is_open : {is_open}")
+        print(f"  date    : {date}")
+        if is_open is not None:
+            print(f"\n  ✓  Backend market status returned authoritative value")
+        else:
+            print(f"\n  ⚠  is_open missing from response — check schwab_service.get_market_status()")
+except Exception as e:
+    print(f"  EXCEPTION: {e}")
+
+
+section("7. CORS preflight OPTIONS — /portfolio/")
 t0 = time.time()
 try:
     r = httpx.options(

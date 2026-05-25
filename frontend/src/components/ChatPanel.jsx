@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { getMarketStatus } from '../utils/market'
+import { useMarketStatus } from '../utils/market'
 
 const API = import.meta.env.VITE_API_URL || '/api'
 
@@ -134,7 +134,7 @@ function SuggestTab() {
   const [loading, setLoading]   = useState(false)
   const [error, setError]       = useState(null)
   const [allowLoss, setAllowLoss] = useState(false)
-  const { open: marketOpen, closedRange } = getMarketStatus()
+  const { open: marketOpen, closedRange } = useMarketStatus()
 
   function fetchSuggestions() {
     setLoading(true)

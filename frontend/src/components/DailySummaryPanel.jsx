@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getMarketStatus } from '../utils/market'
+import { useMarketStatus } from '../utils/market'
 
 const API = import.meta.env.VITE_API_URL || '/api'
 
@@ -19,6 +19,8 @@ export default function DailySummaryPanel() {
   }
 
   useEffect(() => { fetchBriefing() }, [])
+
+  const { isTodayTradingDay, nextOpenDate } = useMarketStatus()
 
   const minsLeft = data?.minutes_remaining
   const marketOpen = minsLeft != null && minsLeft > 0
@@ -69,13 +71,13 @@ export default function DailySummaryPanel() {
               {data.briefing}
             </p>
           )}
-          {!error && data && (!marketOpen || !data.briefing) && (() => {
-            const { isTodayTradingDay, nextOpenDate } = getMarketStatus()
-            const msg = isTodayTradingDay
-              ? 'Market closed — new briefing at market open (~9:35 AM ET).'
-              : `Market closed — next briefing ${nextOpenDate}, ~9:35 AM ET.`
-            return <p className="status">{msg}</p>
-          })()}
+          {!error && data && (!marketOpen || !data.briefing) && (
+            <p className="status">
+              {isTodayTradingDay
+                ? 'Market closed — new briefing at market open (~9:35 AM ET).'
+                : `Market closed — next briefing ${nextOpenDate}, ~9:35 AM ET.`}
+            </p>
+          )}
           {loading && <p className="status">Loading…</p>}
         </>
       )}

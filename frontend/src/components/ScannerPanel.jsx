@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { getMarketStatus } from '../utils/market'
+import { useMarketStatus } from '../utils/market'
 
 const API = import.meta.env.VITE_API_URL || '/api'
 const POLL_INTERVAL = 60_000
@@ -8,6 +8,8 @@ export default function ScannerPanel() {
   const [movers, setMovers] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+
+  const { open, closedRange } = useMarketStatus()
 
   const load = useCallback(() => {
     setLoading(true)
@@ -46,14 +48,11 @@ export default function ScannerPanel() {
         <p className="status">No movers found.</p>
       )}
 
-      {!loading && !error && movers.length > 0 && (() => {
-        const { open, closedRange } = getMarketStatus()
-        return !open ? (
-          <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
-            Last trading day data — market closed{closedRange ? ` (${closedRange})` : ''}.
-          </p>
-        ) : null
-      })()}
+      {!loading && !error && movers.length > 0 && !open && (
+        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
+          Last trading day data — market closed{closedRange ? ` (${closedRange})` : ''}.
+        </p>
+      )}
 
       {movers.length > 0 && (
         <div className="table-wrap">
