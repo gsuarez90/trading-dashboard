@@ -124,18 +124,15 @@ Resources:
     Properties:
       Name: /trading-app/schwab-token
       Description: Schwab OAuth token JSON (written by schwab_auth.py, rotated automatically)
-      SecretString: '{}'
-      # After deploy, seed the real token:
-      # aws secretsmanager put-secret-value \
-      #   --secret-id /trading-app/schwab-token \
-      #   --secret-string "$(cat backend/schwab_token.json)"
+      # SecretString intentionally omitted — CloudFormation must not overwrite the live token on deploy.
+      # Seed once after first deploy: aws secretsmanager put-secret-value --secret-id /trading-app/schwab-token --secret-string "$(cat backend/schwab_token.json)"
 
   RobinhoodSessionSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
       Name: /trading-app/robinhood-session
       Description: Robinhood session token (base64 pickle) — written by Lambda after login, avoids device-approval on cold start
-      SecretString: '{}'
+      # SecretString intentionally omitted — Lambda writes this after first login.
 
   # ── IAM shared policies ────────────────────────────────────────────────────────
 
