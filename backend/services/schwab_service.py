@@ -198,6 +198,24 @@ def get_scanner_results(tickers: list[str], min_change_pct: float = 2.0) -> list
 # ── Price history ─────────────────────────────────────────────────────────────
 
 
+def get_market_status() -> dict:
+    """Returns current equity market open/closed status from Schwab.
+
+    Response includes isOpen bool and date string (YYYY-MM-DD).
+    Accounts for weekends and market holidays automatically.
+    """
+    resp = _get_client().get_market_hours(
+        [schwab.client.Client.MarketHours.Market.EQUITY]
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    equity = data.get("equity", {}).get("equity", {})
+    return {
+        "is_open": equity.get("isOpen", False),
+        "date": equity.get("date"),
+    }
+
+
 def get_daily_bars(ticker: str, from_date: str, to_date: str) -> list[dict]:
     """Daily OHLCV bars for a ticker. Dates as 'YYYY-MM-DD'.
 

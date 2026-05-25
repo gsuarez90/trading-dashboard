@@ -1,16 +1,49 @@
-# React + Vite
+# Frontend — AI Trading Dashboard
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React + Vite single-page app. Builds into a static bundle deployed to S3/CloudFront.
 
-Currently, two official plugins are available:
+## Development
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+npm ci           # install dependencies
+npm run dev      # dev server at http://localhost:5173 (proxies /api → localhost:8000)
+npm run build    # production build → dist/
+npm run lint     # ESLint
+```
 
-## React Compiler
+The dev server proxies `/api/*` to the backend at `:8000`. Start the backend first:
+```bash
+bash ../scripts/start.sh
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Environment variables
 
-## Expanding the ESLint configuration
+Set in `.env.local` for local dev (gitignored). Baked into the bundle at build time by CI.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project
+| Variable | Description |
+|---|---|
+| `VITE_API_URL` | Backend API base URL. Omit locally (proxy handles it). |
+| `VITE_PORTFOLIO_MODE` | `synthetic` (public demo) or `live` (real Robinhood account). |
+| `VITE_API_KEY` | Private build only — `x-api-key` header sent on every API request. |
+
+## Two builds from one source
+
+CI produces two separate bundles from this codebase:
+
+- **Public build** (`VITE_PORTFOLIO_MODE=synthetic`) → `s3://trading-dashboard-public` → `ait.gsuarez.dev`
+- **Private build** (`VITE_PORTFOLIO_MODE=live`) → `s3://trading-dashboard-private` → `degen.gsuarez.dev` (Cloudflare Access protected)
+
+Both call the same backend. `VITE_PORTFOLIO_MODE` controls which portfolio provider the backend uses.
+
+## Key components
+
+| Component | Description |
+|---|---|
+| `PortfolioView` | Holdings with live prices, unrealized P&L |
+| `DailySummaryPanel` | Morning briefing from Claude, market-closed state |
+| `ScannerPanel` | Top movers from Schwab, cached at 9:35 AM ET |
+| `SentimentFeed` | Finnhub sentiment scores |
+| `ChatPanel` | Free-form Claude chat + trade suggestions |
+| `PaperTradingPanel` | Enter/track/close paper trades |
+| `LiveTrackingPanel` | Live trade log (manual Robinhood execution) |
+| `GuardrailsPanel` | Guardrail status, kill switch, blocked trade log |

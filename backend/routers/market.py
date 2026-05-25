@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query
 
-from services import finnhub_service
+from services import finnhub_service, schwab_service
 
 router = APIRouter(prefix="/market", tags=["market"])
 
@@ -28,3 +28,11 @@ def get_news(ticker: str, days: int = Query(default=7, ge=1, le=30)):
         return finnhub_service.get_company_news(ticker, days=days)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Finnhub error: {e}")
+
+
+@router.get("/status")
+def get_market_status():
+    try:
+        return schwab_service.get_market_status()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Market status check failed: {e}")
