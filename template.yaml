@@ -130,6 +130,13 @@ Resources:
       #   --secret-id /trading-app/schwab-token \
       #   --secret-string "$(cat backend/schwab_token.json)"
 
+  RobinhoodSessionSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: /trading-app/robinhood-session
+      Description: Robinhood session token (base64 pickle) — written by Lambda after login, avoids device-approval on cold start
+      SecretString: '{}'
+
   # ── IAM shared policies ────────────────────────────────────────────────────────
 
   DynamoPolicy:
@@ -163,6 +170,7 @@ Resources:
             Resource:
               - !Ref SchwabTokenSecret
               - !Ref RobinhoodCredentials
+              - !Ref RobinhoodSessionSecret
 
   SsmApiKeysPolicy:
     Type: AWS::IAM::ManagedPolicy
