@@ -43,6 +43,7 @@ def _enrich_positions(positions: list[dict]) -> list[dict]:
     return enriched
 
 
+@router.get("")
 @router.get("/")
 def get_portfolio(mode: Optional[str] = Query(default=None)):
     try:

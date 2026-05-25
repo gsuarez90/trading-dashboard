@@ -23,6 +23,7 @@ class CloseTradeRequest(BaseModel):
     close_reason: str = "manual"
 
 
+@router.post("")
 @router.post("/", response_model=PaperTrade)
 def open_trade(request: OpenTradeRequest):
     try:
@@ -56,6 +57,7 @@ def get_summary(date: str = Query(default=None)):
         raise HTTPException(status_code=502, detail=f"Summary failed: {e}")
 
 
+@router.get("")
 @router.get("/")
 def list_trades(date: str = Query(default=None)):
     try:
