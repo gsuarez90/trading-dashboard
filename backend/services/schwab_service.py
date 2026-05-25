@@ -43,7 +43,7 @@ def _get_client():
         def _read():
             return json.loads(sm.get_secret_value(SecretId=secret_arn)["SecretString"])
 
-        def _write(token):
+        def _write(token, **kwargs):
             sm.put_secret_value(SecretId=secret_arn, SecretString=json.dumps(token))
 
         _client = schwab.auth.client_from_access_functions(

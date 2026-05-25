@@ -10,6 +10,7 @@ Expected results:
   10–30s per call → API hangs; confirms the 503 root cause
   HTTP 200, 0 movers → API works on weekends, just returns empty (no hang)
 """
+import re
 import sys
 import time
 from pathlib import Path
@@ -17,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).resolve().parent.parent / "backend" / ".env.local")
+load_dotenv(Path(__file__).resolve().parent.parent / ".env.local")
 
 import schwab
 from services.schwab_service import _get_client
@@ -64,3 +65,28 @@ elif total < 3:
     print("✓  Calls fail fast. Fix is precautionary but still correct to remove unnecessary calls.")
 else:
     print("⚠  Moderate latency. Fix still recommended.")
+
+# ── Market hours ──────────────────────────────────────────────────────────────
+print("\n--- get_market_hours ---")
+t0 = time.time()
+try:
+    resp = client.get_market_hours(
+        [schwab.client.Client.MarketHours.Market.EQUITY]
+    )
+    elapsed = time.time() - t0
+    print(f"HTTP {resp.status_code} in {elapsed:.2f}s")
+    import json
+    data = resp.json()
+    print(json.dumps(data, indent=2))
+except Exception as e:
+    elapsed = time.time() - t0
+    print(f"Exception after {elapsed:.2f}s — {type(e).__name__}: {e}")
+
+# ── _write callback signature check ──────────────────────────────────────────
+print("\n--- _write callback signature ---")
+src = Path(__file__).parent.parent / "backend/services/schwab_service.py"
+text = src.read_text()
+if re.search(r'def _write\(token,\s*\*\*kwargs\)', text):
+    print("✓  _write accepts **kwargs — token refresh will not throw TypeError")
+else:
+    print("✗  _write missing **kwargs — token refresh WILL fail with TypeError")
