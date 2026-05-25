@@ -8,7 +8,7 @@ Lambda:     reads/writes token via Secrets Manager (wired up at Step 21)
 
 import json
 import os
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -198,21 +198,49 @@ def get_scanner_results(tickers: list[str], min_change_pct: float = 2.0) -> list
 # ── Price history ─────────────────────────────────────────────────────────────
 
 
-def get_market_status() -> dict:
-    """Returns current equity market open/closed status from Schwab.
+def _fetch_today_status() -> dict:
+    """Single Schwab call for today's market open/closed status.
 
-    Response includes isOpen bool and date string (YYYY-MM-DD).
-    Accounts for weekends and market holidays automatically.
+    Used by get_market_status() and context_loader._minutes_remaining().
+    Kept separate so callers that only need is_open don't pay for the
+    forward query that computes next_open_date.
     """
     resp = _get_client().get_market_hours(
         [schwab.client.Client.MarketHours.Market.EQUITY]
     )
     resp.raise_for_status()
-    data = resp.json()
-    equity = data.get("equity", {}).get("equity", {})
+    equity = next(iter(resp.json().get("equity", {}).values()), {})
     return {
         "is_open": equity.get("isOpen", False),
-        "date": equity.get("date"),
+        "date":    equity.get("date"),
+    }
+
+
+def get_market_status() -> dict:
+    """Returns current equity market status plus next trading day.
+
+    Queries today's status, then walks forward day-by-day until Schwab
+    confirms a trading day — typically 1 extra call (tomorrow), up to 4
+    over a long weekend. Accounts for all NYSE holidays automatically.
+    """
+    client    = _get_client()
+    today     = _fetch_today_status()
+    check     = datetime.now(tz=ET).date()
+    next_open = None
+    for _ in range(10):
+        check += timedelta(days=1)
+        r = client.get_market_hours(
+            [schwab.client.Client.MarketHours.Market.EQUITY], date=check
+        )
+        r.raise_for_status()
+        eq = next(iter(r.json().get("equity", {}).values()), {})
+        if eq.get("isOpen", False):
+            next_open = check.strftime("%Y-%m-%d")
+            break
+    return {
+        "is_open":        today["is_open"],
+        "date":           today["date"],
+        "next_open_date": next_open,
     }
 
 

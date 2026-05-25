@@ -13,6 +13,7 @@ Expected results:
 import re
 import sys
 import time
+from datetime import date, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
@@ -82,6 +83,46 @@ except Exception as e:
     elapsed = time.time() - t0
     print(f"Exception after {elapsed:.2f}s — {type(e).__name__}: {e}")
 
+# ── next_open_date forward query (Option A) ───────────────────────────────────
+print("\n--- next_open_date forward query ---")
+print("Querying Schwab forward day-by-day until isOpen=true...\n")
+total_next = 0.0
+next_open = None
+check = date.today()
+for i in range(10):
+    check += timedelta(days=1)
+    t0 = time.time()
+    try:
+        resp = client.get_market_hours(
+            [schwab.client.Client.MarketHours.Market.EQUITY],
+            date=check,
+        )
+        elapsed = time.time() - t0
+        total_next += elapsed
+        raw = resp.json()
+        equity = next(iter(raw.get("equity", {}).values()), {})
+        is_open = equity.get("isOpen", False)
+        print(f"  {check}  HTTP {resp.status_code}  isOpen={is_open}  ({elapsed:.2f}s)")
+        if is_open:
+            next_open = check
+            break
+    except Exception as e:
+        elapsed = time.time() - t0
+        total_next += elapsed
+        print(f"  {check}  Exception after {elapsed:.2f}s — {type(e).__name__}: {e}")
+        break
+
+print(f"\n  Total time : {total_next:.2f}s across {i + 1} call(s)")
+if next_open:
+    print(f"  next_open  : {next_open}  ✓")
+    if total_next < 2.0:
+        print("  Latency    : acceptable for /market/status endpoint")
+    else:
+        print("  ⚠  Latency may be noticeable — consider caching /market/status response")
+else:
+    print("  ✗  No open date found within 10 days")
+
+
 # ── _write callback signature check ──────────────────────────────────────────
 print("\n--- _write callback signature ---")
 src = Path(__file__).parent.parent / "backend/services/schwab_service.py"
@@ -90,3 +131,37 @@ if re.search(r'def _write\(token,\s*\*\*kwargs\)', text):
     print("✓  _write accepts **kwargs — token refresh will not throw TypeError")
 else:
     print("✗  _write missing **kwargs — token refresh WILL fail with TypeError")
+
+
+# ── Option A end-to-end: get_market_status() via service layer ────────────────
+print("\n--- Option A: get_market_status() service call ---")
+from services.schwab_service import get_market_status, _fetch_today_status
+
+t0 = time.time()
+try:
+    today_status = _fetch_today_status()
+    elapsed = time.time() - t0
+    print(f"_fetch_today_status()  →  {elapsed:.2f}s")
+    print(f"  is_open : {today_status['is_open']}")
+    print(f"  date    : {today_status.get('date')}")
+except Exception as e:
+    print(f"_fetch_today_status() FAILED: {type(e).__name__}: {e}")
+
+t0 = time.time()
+try:
+    status = get_market_status()
+    elapsed = time.time() - t0
+    print(f"\nget_market_status()    →  {elapsed:.2f}s")
+    print(f"  is_open        : {status['is_open']}")
+    print(f"  date           : {status.get('date')}")
+    print(f"  next_open_date : {status.get('next_open_date')}")
+    if status.get('next_open_date'):
+        print("  ✓  Option A fully functional — next_open_date returned")
+    else:
+        print("  ✗  next_open_date missing — forward query may have failed")
+    if elapsed < 3.0:
+        print(f"  ✓  Total latency acceptable ({elapsed:.2f}s)")
+    else:
+        print(f"  ⚠  Latency high ({elapsed:.2f}s) — consider caching /market/status")
+except Exception as e:
+    print(f"get_market_status() FAILED: {type(e).__name__}: {e}")
