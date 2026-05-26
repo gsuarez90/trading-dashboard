@@ -779,6 +779,30 @@ If the SAM deploy itself fails mid-way, CloudFormation will automatically roll b
 
 ---
 
+## Post-Deploy Enhancement — Get Suggestions: Include Top Movers
+
+**Context:** Top movers data from the scanner is already passed to Claude in every `suggest_trades()` call via `load_context()` → `scanner_results`. Claude can see them but is currently restricted from acting on them by the `TRADE_SCOPE=holdings_only` SSM parameter, which limits suggestions to existing portfolio holdings only.
+
+**What to change after Step 8 is verified:**
+
+1. Update the SSM parameter:
+   ```powershell
+   aws ssm put-parameter `
+     --name "/trading-app/trade-scope" `
+     --value "all" `
+     --type "String" `
+     --overwrite
+   ```
+   (Or use a new value like `holdings_and_movers` if the prompt already handles it — check `claude_service.py` `suggest_trades()` prompt for valid `TRADE_SCOPE` values before changing.)
+
+2. Verify the prompt in `claude_service.py` surfaces the top movers as candidates when `TRADE_SCOPE` is not `holdings_only`. If it only lists position tickers as eligible, the prompt may need a small update to also enumerate the top 3–5 movers from `scanner_results` as potential new entries.
+
+3. Test on the private URL — "Get Suggestions" should now include new-entry candidates from the scanner alongside existing holdings.
+
+**Why this is a post-deploy item:** This is a prompt/config change, not infrastructure. Do it after the two-lambda deploy is confirmed working so portfolio data is real before tuning the suggestion behavior.
+
+---
+
 ## Key Rotation
 
 When you need to rotate the private API key:

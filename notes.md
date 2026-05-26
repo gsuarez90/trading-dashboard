@@ -727,3 +727,40 @@ Verify it's gone:
 ```bash
 echo $RH_MFA_CODE   # should print nothing
 ```
+
+---
+
+## API Gateway vs Lambda Function URL — Why the Switch Was Made
+
+The sole driver was the **29-second hard ceiling on API Gateway HTTP API**. Every request routed through API Gateway must complete within 29s — there is no configuration override. The `suggest-trades` call profile on a cold Lambda was:
+
+```
+cold start (~2s) + load_context (~1s) + Claude suggest (~28s) = ~31s  ← over ceiling
+```
+
+API Gateway returns a 503 before the Lambda finishes. Lambda Function URLs have no gateway-layer timeout — only the Lambda's own timeout applies (currently 120s on the main API function). That is the only reason for the switch.
+
+### What API Gateway Provides That Function URLs Don't
+
+| Feature | API Gateway | Lambda Function URL | Impact for this project |
+|---|---|---|---|
+| Gateway timeout ceiling | 29s hard limit | None (Lambda timeout only) | **This is why we switched** |
+| Rate limiting / throttling | Native burst + per-route throttling | None built-in | Cloudflare handles this (30 req/min per IP) — not a gap |
+| API key + usage plans | Native — quotas, throttle per key | None | Replaced by FastAPI `x-api-key` middleware — simpler for single-user |
+| AWS WAF integration | Direct association supported | Not supported | Cloudflare DDoS/WAF covers this — not a gap |
+| Custom domain names | Native support | Generates `xxxxx.lambda-url.us-east-1.on.aws` | URL is baked into the frontend build env var (`VITE_API_URL`), never visible in the browser address bar |
+| Multiple stages (dev/staging/prod) | Native | None | Single-stage project — not needed |
+| Request/response transformation | Mapping templates | None | Not used |
+| HTTP access logs | Separate access log stream | Lambda invocation logs only | **Only real gap** — CloudWatch Lambda logs still show all requests |
+| Response caching | Built-in | None | Not useful — all data is dynamic |
+| Native Lambda/Cognito/JWT auth | Full suite | IAM or NONE only | Replaced by Cloudflare Access + FastAPI middleware — not a gap |
+
+### What You're Actually Losing
+
+The only real loss is **structured HTTP access logs**. API Gateway has a dedicated access log stream (separate from Lambda invocation logs) that captures per-request metadata — method, path, status code, latency, caller IP — in a queryable format. With Function URLs, you only get Lambda invocation logs in CloudWatch, which include unstructured stdout/stderr from your FastAPI app.
+
+**Why this doesn't matter for this project:** The app has one user (you). There's no audit requirement, no per-endpoint latency dashboard, and no need to query "how many times was `/ai/suggest-trades` called this week." If that ever matters, structured logging can be added to FastAPI middleware (`access.log`-style) to approximate it.
+
+### The Legacy API Gateway URL
+
+`TradingHttpApi` is still in `template.yaml` (and still deployed) as a rollback option. It's the `ApiUrl` CloudFormation output. It has the 29s ceiling and is unused by both frontends. It can be removed in a future cleanup once the Function URL approach is confirmed stable.

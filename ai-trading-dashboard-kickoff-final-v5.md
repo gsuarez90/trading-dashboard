@@ -1,4 +1,4 @@
-# Claude Code Kickoff Prompt — AI Trading Dashboard (Final v5)
+# Claude Code Kickoff Prompt — AI Trading Dashboard (Final v5, updated 2026-05-26)
 
 ## Project Overview
 Build a personal AI-assisted stock trading dashboard using FastAPI, the Anthropic Claude API, and a 100% AWS infrastructure stack. The app is a single-user portfolio tool that:
@@ -14,27 +14,35 @@ All live trades are placed manually by the user in the Robinhood app.
 
 ---
 
+## Current Status (as of 2026-05-26)
+
+**Phase 1 is complete.** The app is live at two URLs:
+- `your-public-domain.com` — public demo (synthetic portfolio, anyone can view)
+- `your-private-domain.com` — private personal URL (Cloudflare Access email OTP gate)
+
+**In progress:** Two-Lambda infrastructure split (`two-lambda-implementation.md`). Both URLs currently route to the same Lambda with `PORTFOLIO_MODE=synthetic`. The split will give each URL its own Lambda with IAM-level Robinhood access control. Backend code is complete; AWS infrastructure changes (Steps 1–3 of 8 done locally, Steps 4–8 pending deploy).
+
+---
+
 ## Full Architecture
 
 ```
-Public version (yourapp.com):
-  Porkbun DNS (CNAME → CloudFront)
-    → CloudFront + AWS Shield Standard (CDN + SSL + DDoS)
-      → S3 (React frontend files)
-        → API Gateway
-          → Lambda (FastAPI backend)
-            → DynamoDB (trade data)
-            → S3 (Plotly analytics charts)
+Public version (your-public-domain.com):
+  Porkbun DNS → Cloudflare (rate limiting, DDoS) → CloudFront
+    → S3 (React frontend — trading-dashboard-public)
+      → Lambda Function URL
+        → TradingDashboardFunction (FastAPI, PORTFOLIO_MODE=synthetic)
+          → DynamoDB, Secrets Manager (Schwab only), SSM
 
-Personal version (private.yourapp.com):
-  Porkbun DNS (CNAME → CloudFront)
-    → CloudFront + Lambda@Edge (CDN + SSL + HTTP Basic Auth)
-      → S3 (React frontend files — private bucket)
-        → API Gateway
-          → Lambda (FastAPI backend — live Robinhood)
-            → DynamoDB
-            → S3 (charts)
+Personal version (your-private-domain.com):
+  Porkbun DNS → Cloudflare Access (email OTP) → CloudFront
+    → S3 (React frontend — trading-dashboard-private)
+      → Lambda Function URL (x-api-key header required)
+        → TradingDashboardPrivateFunction (FastAPI, PORTFOLIO_MODE=live)
+          → DynamoDB, Secrets Manager (Schwab + Robinhood), SSM
 ```
+
+**Two Lambda functions from one codebase** (`CodeUri: backend/`). IAM policies enforce the isolation — the public Lambda's execution role has no path to Robinhood credentials.
 
 100% AWS infrastructure. One account, one bill, one ecosystem.
 
@@ -43,9 +51,9 @@ Personal version (private.yourapp.com):
 ## Full Product Roadmap
 
 ```
-Phase 1 — Build + Paper Trade (4-6 weeks)
+Phase 1 — Build + Paper Trade (4-6 weeks) ✅ COMPLETE (built not fully complete in terms of data collection)
   Core app built and running
-  Paper trades against real Polygon.io market data
+  Paper trades against real Schwab market data
   Basic performance tracking
   Establish daily workflow and 3:45pm alarm habit
   Goal: prove the system works mechanically
@@ -84,14 +92,14 @@ Phase 4 — Full Live Trading + SageMaker Active (ongoing)
 
 **Portfolio Mode:**
 - `live` — real Robinhood cash balance via robin_stocks (read-only)
-- `synthetic` — generated portfolio using real Polygon.io prices (cloud demo)
+- `synthetic` — static fictional portfolio using real Schwab prices (cloud demo)
 
 **Trading Mode:**
 - `paper` — simulated trades tracked against real market prices
 - `live` — manually placed trades logged and tracked
 
 **Trade Scope:**
-- `holdings_only`*(might want to separate into a cash holding and b stock holdings)* — Claude only suggests trades using stocks already owned
+- `holdings_only` — Claude only suggests trades using stocks already owned
 - `open` — Claude suggests from daily scanner
 - `both` — Claude considers both
 
@@ -102,7 +110,7 @@ Phase 4 — Full Live Trading + SageMaker Active (ongoing)
 
 **Recommended starting config:**
 ```
-PORTFOLIO_MODE=live
+PORTFOLIO_MODE=live       (private Lambda only — set per-function in template.yaml)
 TRADING_MODE=paper
 TRADE_SCOPE=holdings_only
 PROFIT_MODE=cash_intraday
@@ -113,24 +121,24 @@ DAILY_GOAL=100
 
 ## Tech Stack
 
-### Phase 1 — Core
+### Phase 1 — Core (all built)
 - **Backend**: Python 3.13, FastAPI, Mangum (Lambda adapter)
-- **AI Layer**: Anthropic Claude API (claude-sonnet-4-20250514)
-- **Market Data**: Polygon.io (free tier)
-- **News/Sentiment**: Finnhub (free tier)
-- **Portfolio read**: robin_stocks (read-only, no order placement)
-- **Portfolio synthetic**: Internal generator using Polygon.io prices
-- **Paper Trading**: Internal engine, DynamoDB persistence
-- **Database**: DynamoDB (AWS free tier)
-- **Frontend hosting**: AWS S3 + CloudFront
-- **Backend hosting**: AWS Lambda + API Gateway
-- **Scheduler**: AWS EventBridge
+- **AI Layer**: Anthropic Claude API (`claude-sonnet-4-6`) — do not downgrade
+- **Market Data**: Schwab API (OAuth, `schwab_service.py`) — replaced Polygon.io
+- **News/Sentiment**: Finnhub (free tier, `finnhub_service.py`)
+- **Portfolio read**: robin_stocks via `robinhood_service.py` (read-only, no order placement)
+- **Portfolio synthetic**: `synthetic_portfolio.py` — static dict, real Schwab prices applied
+- **Paper Trading**: Internal engine, DynamoDB persistence (`paper_trading_service.py`)
+- **Database**: DynamoDB (AWS free tier, single table `trading-dashboard`)
+- **Frontend hosting**: AWS S3 + CloudFront (two buckets, two distributions)
+- **Backend hosting**: AWS Lambda (Function URLs, no 29s ceiling) + API Gateway (legacy, kept for rollback)
+- **Scheduler**: AWS EventBridge (5 Lambda functions total)
 - **Security/Routing**: Cloudflare (rate limiting, DDoS, Access auth)
-- **CI/CD**: GitHub Actions
-- **IaC**: AWS SAM (template.yaml)
+- **CI/CD**: GitHub Actions (OIDC role, three parallel jobs)
+- **IaC**: AWS SAM (`template.yaml` at repo root)
 
 ### Phase 2 additions
-- **Validation**: validation_service.py
+- **Validation**: `validation_service.py`
 - **Analytics**: Lambda + Pandas + NumPy + SciPy + Scikit-learn + Plotly
 - **Chart storage**: S3 bucket (Plotly HTML charts)
 - **ML**: SageMaker Data Wrangler + Serverless Inference
@@ -154,32 +162,64 @@ Slots in as drop-in replacement without restructuring the codebase.
 ## AWS Backend — Always On
 
 ```
-7:00am ET     Daily Refresh Lambda
-              Scanner + sentiment → DynamoDB cache
+9:35am ET     DailyRefreshFunction (synthetic briefing — public Lambda)
+              Schwab movers + Finnhub sentiment → DynamoDB cache ("scanner", "sentiment")
+              Claude morning briefing → DynamoDB cache ("briefing", synthetic portfolio context)
 
-9:30am ET     Price Monitor Lambda starts (market hours)
-              Every 5 min — checks open paper/live trades
-              Auto-closes trades hitting target or stop via Polygon.io
+9:35am ET     DailyRefreshLiveBriefingFunction (live briefing — private Lambda)
+              Runs concurrently with DailyRefreshFunction
+              Claude morning briefing → DynamoDB cache ("briefing_live", real Robinhood context)
 
-3:45pm ET     End of Day Lambda
+9:30am ET     PriceMonitorFunction starts (market hours)
+              Every 1 min — checks open paper/live trades
+              Auto-closes trades hitting target or stop via Schwab
+
+3:45pm ET     EndOfDayFunction
               Auto-closes remaining open paper trades at market price
               Flags open live trades → dashboard alert for manual close
 
-4:00pm ET     Price Monitor Lambda stops
+5:00pm ET     PriceMonitorFunction stops
 
-Nightly       Analytics Lambda (Phase 2+)
+Nightly       AnalyticsFunction (Phase 2+ — stub only, not active)
               Validation, Monte Carlo, conditions analysis
               Plotly charts → S3
               Results → DynamoDB
-
-Weekly        SageMaker Training Job (Phase 2+)
-              Retrains ML model on accumulated trade data
-
-Public Demo Lambda
-              Always available at yourapp.com
-              Synthetic portfolio, paper mode
-              Cloudflare rate limited (30 req/min per IP)
 ```
+
+**Cache behavior:** `DailyRefreshFunction` writes scanner/sentiment/briefing to DynamoDB at 9:35am ET. Both public and private Lambdas read from this cache on every request. Cache freshness is ET-date-based — stale if no entry for today. On cache miss, `load_context()` falls back to live Schwab/Finnhub calls.
+
+---
+
+## Secrets Architecture
+
+```
+SSM Parameter Store (plain String — resolved by CloudFormation at deploy time):
+  /trading-app/portfolio-mode       → synthetic  (public Lambda SSM default; private Lambda overrides to "live" in template.yaml)
+  /trading-app/trading-mode         → paper
+  /trading-app/profit-mode          → cash_intraday
+  /trading-app/trade-scope          → holdings_only
+  /trading-app/daily-goal           → 100
+  /trading-app/daily-loss-limit     → 200
+  /trading-app/daily-trade-limit    → 3
+  /trading-app/max-position-size-pct → 20
+
+SSM Parameter Store (SecureString — fetched at Lambda cold start by ssm_service.py):
+  /trading-app/anthropic-key        → Anthropic API key
+  /trading-app/finnhub-key          → Finnhub API key
+  /trading-app/schwab-client-id     → Schwab OAuth client ID
+  /trading-app/schwab-client-secret → Schwab OAuth client secret
+  /trading-app/private-api-key      → UUID shared secret (x-api-key header for private Lambda)
+
+Secrets Manager (DeletionPolicy: Retain on all — sam deploy never resets values):
+  /trading-app/schwab-token         → Schwab OAuth token JSON (written/rotated by schwab_service.py)
+  /trading-app/robinhood-session    → Robinhood session pickle base64 (written by robinhood_service._save_session())
+  /trading-app/robinhood-credentials → {"username": "...", "password": "..."} — NOT CF-managed
+                                        (removed from template.yaml to prevent sam deploy resets)
+```
+
+**IAM policy split:**
+- `SchwabSecretsPolicy` — GetSecretValue + PutSecretValue on Schwab token only. Assigned to public Lambda and all scheduled functions.
+- `RobinhoodSecretsPolicy` — GetSecretValue on robinhood-credentials, GetSecretValue + PutSecretValue on robinhood-session. Assigned to private Lambda and DailyRefreshLiveBriefingFunction only.
 
 ---
 
@@ -187,58 +227,64 @@ Public Demo Lambda
 
 ### Two S3 buckets — one per deployment:
 ```
-trading-dashboard-public      → yourapp.com (public demo)
-trading-dashboard-private     → private.yourapp.com (personal)
+trading-dashboard-public   → your-public-domain.com (public demo)
+trading-dashboard-private  → your-private-domain.com (personal)
 ```
 
 ### CloudFront distributions — one per bucket:
-- SSL certificate (AWS Certificate Manager — free)
+- SSL via AWS Certificate Manager (free)
 - Global CDN distribution
 - Cache invalidation on every deploy
 
-### CI/CD — GitHub Actions builds and deploys both:
+### CI/CD — GitHub Actions builds and deploys:
 ```yaml
-- name: Build React app
-  run: cd frontend && npm run build
+# Three parallel jobs: backend, frontend-public, frontend-private
+# Authentication: GitHub OIDC → IAM role (no long-lived access keys)
 
-- name: Deploy public frontend to S3
-  run: aws s3 sync frontend/dist s3://trading-dashboard-public
+# backend job
+- sam build && sam deploy --no-confirm-changeset --no-fail-on-empty-changeset
+
+# frontend-public job (runs after backend)
+- name: Build public frontend
+  run: cd frontend && npm ci && npm run build
   env:
     VITE_API_URL: ${{ secrets.PUBLIC_API_URL }}
     VITE_PORTFOLIO_MODE: synthetic
+    # No VITE_API_KEY — public Lambda requires no auth header
+- aws s3 sync frontend/dist s3://trading-dashboard-public --delete
+- aws cloudfront create-invalidation --distribution-id ${{ secrets.PUBLIC_CF_DIST_ID }} --paths "/*"
 
-- name: Deploy private frontend to S3
-  run: aws s3 sync frontend/dist s3://trading-dashboard-private
+# frontend-private job (runs after backend)
+- name: Build private frontend
+  run: cd frontend && npm ci && npm run build
   env:
     VITE_API_URL: ${{ secrets.PRIVATE_API_URL }}
     VITE_PORTFOLIO_MODE: live
-
-- name: Invalidate CloudFront caches
-  run: |
-    aws cloudfront create-invalidation \
-      --distribution-id ${{ secrets.PUBLIC_CF_ID }} --paths "/*"
-    aws cloudfront create-invalidation \
-      --distribution-id ${{ secrets.PRIVATE_CF_ID }} --paths "/*"
+    VITE_API_KEY: ${{ secrets.PRIVATE_API_KEY }}    # injects x-api-key header on all requests
+- aws s3 sync frontend/dist s3://trading-dashboard-private --delete
+- aws cloudfront create-invalidation --distribution-id ${{ secrets.PRIVATE_CF_DIST_ID }} --paths "/*"
 ```
 
-Every push to main deploys both versions automatically.
+**Note:** `VITE_API_KEY` line is pending (Step 5 of two-lambda implementation). `deploy.yml` does not yet include it.
+
+Every push to `main` (touching `backend/`, `frontend/`, `template.yaml`, or `samconfig.toml`) deploys both versions automatically.
 
 ---
 
 ## Cloudflare Configuration
 
-### Public version (yourapp.com):
-- DNS A record → CloudFront distribution URL
+### Public version (your-public-domain.com):
+- DNS CNAME → CloudFront distribution URL (via Porkbun registrar)
 - Rate limiting: 30 requests/min per IP → block 1 hour
 - Bot Fight Mode: on
 - DDoS protection: on (automatic, free)
 
-### Personal version (private.yourapp.com):
-- DNS A record → CloudFront distribution URL
+### Personal version (your-private-domain.com):
+- DNS CNAME → CloudFront distribution URL (via Porkbun registrar)
 - Cloudflare Access application:
-  - Authentication: One-time PIN to your email
-  - Policy: allow your email address only
-  - Everyone else: blocked, can't see anything
+  - Authentication: One-time PIN to owner email
+  - Policy: allow owner email address only
+  - Everyone else: blocked
 - No rate limiting needed (personal use only)
 
 ---
@@ -249,72 +295,76 @@ trading-dashboard/
 ├── backend/
 │   ├── main.py                          # FastAPI app + all Lambda handlers
 │   ├── routers/
-│   │   ├── scanner.py
-│   │   ├── sentiment.py
-│   │   ├── portfolio.py
-│   │   ├── backtest.py
 │   │   ├── ai.py                        # Briefing + chat + suggestions
-│   │   ├── paper_trading.py
-│   │   ├── live_tracking.py
 │   │   ├── guardrails.py
-│   │   ├── validation.py                # Phase 2
-│   │   └── analytics.py                 # Phase 2
+│   │   ├── live_tracking.py
+│   │   ├── market.py
+│   │   ├── paper_trading.py
+│   │   ├── portfolio.py
+│   │   ├── scanner.py
+│   │   └── sentiment.py
 │   ├── services/
-│   │   ├── polygon_service.py
+│   │   ├── cache_service.py             # DynamoDB cache read/write + scheduled handlers
+│   │   ├── claude_service.py            # claude-sonnet-4-6 API calls
+│   │   ├── context_loader.py            # full daily context assembly (called before every Claude call)
+│   │   ├── dynamo_service.py
 │   │   ├── finnhub_service.py
-│   │   ├── robinhood_service.py         # Read-only
-│   │   ├── synthetic_portfolio.py
-│   │   ├── portfolio_factory.py
-│   │   ├── claude_service.py
-│   │   ├── context_loader.py
-│   │   ├── paper_trading_service.py
+│   │   ├── guardrail_service.py         # 8 guardrails, same code path paper+live
 │   │   ├── live_tracking_service.py
-│   │   ├── guardrail_service.py
-│   │   ├── validation_service.py        # Phase 2
-│   │   ├── analytics_service.py         # Phase 2
-│   │   ├── sagemaker_service.py         # Phase 2
-│   │   └── dynamo_service.py
+│   │   ├── market_data_service.py
+│   │   ├── paper_trading_service.py
+│   │   ├── portfolio_factory.py         # switches provider based on PORTFOLIO_MODE
+│   │   ├── robinhood_service.py         # read-only, session token via Secrets Manager
+│   │   ├── schwab_service.py            # OAuth client singleton, batch quotes, movers
+│   │   ├── ssm_service.py               # fetches SecureString params at cold start
+│   │   └── synthetic_portfolio.py       # static dict, fictional holdings
 │   ├── models/
 │   │   └── schemas.py
 │   ├── tests/
-│   │   ├── test_guardrails.py
-│   │   ├── test_paper_trading.py
-│   │   ├── test_validation.py           # Phase 2
-│   │   ├── test_analytics.py            # Phase 2
-│   │   └── test_claude_service.py
-│   ├── requirements.txt
-│   └── template.yaml                    # AWS SAM
+│   │   └── test_guardrails.py           # 14 tests — all passing (Phase 1 gate)
+│   └── requirements.txt
 ├── frontend/
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── ScannerPanel.jsx
-│   │   │   ├── SentimentFeed.jsx
-│   │   │   ├── PortfolioView.jsx
-│   │   │   ├── BacktestPanel.jsx
-│   │   │   ├── AIBriefing.jsx
-│   │   │   ├── ChatPanel.jsx
-│   │   │   ├── PaperTradingPanel.jsx
-│   │   │   ├── LiveTrackingPanel.jsx
-│   │   │   ├── DailySummaryPanel.jsx
+│   │   │   ├── ChatPanel.jsx            # suggest-trades + chat + paper trade entry
+│   │   │   ├── DailySummaryPanel.jsx    # morning briefing
 │   │   │   ├── GuardrailsPanel.jsx
-│   │   │   ├── ValidationPanel.jsx      # Phase 2
-│   │   │   └── AnalyticsPanel.jsx       # Phase 2
+│   │   │   ├── LiveTrackingPanel.jsx
+│   │   │   ├── PaperTradingPanel.jsx
+│   │   │   ├── PortfolioView.jsx
+│   │   │   ├── ScannerPanel.jsx
+│   │   │   └── SentimentFeed.jsx
+│   │   ├── utils/
+│   │   │   └── api.js                   # apiFetch() — injects x-api-key on private build
 │   │   ├── App.jsx
 │   │   └── main.jsx
 │   ├── package.json
 │   └── vite.config.js
-├── sagemaker/                           # Phase 2
-│   ├── feature_engineering.py
-│   ├── train.py
-│   ├── inference.py
-│   └── pipeline.py
 ├── .github/
 │   └── workflows/
-│       └── deploy.yml                   # Deploys Lambda + both S3 frontends
-├── .env.example
-├── .env.local                           # gitignored
+│       └── deploy.yml
+├── template.yaml                        # AWS SAM template — at repo root, NOT in backend/
+├── samconfig.toml                       # SAM deploy config — at repo root
+├── two-lambda-implementation.md         # active implementation plan (in progress)
+├── .env.local                           # gitignored — local dev secrets
 └── README.md
 ```
+
+---
+
+## Lambda Functions (template.yaml)
+
+| Function | Handler | Trigger | Policies | Notes |
+|----------|---------|---------|----------|-------|
+| `TradingDashboardFunction` | `main.handler` | Lambda Function URL + API Gateway | Dynamo + SchwabSecrets + SsmApiKeys | Public, `PORTFOLIO_MODE=synthetic` from SSM |
+| `TradingDashboardPrivateFunction` | `main.handler` | Lambda Function URL | Dynamo + SchwabSecrets + RobinhoodSecrets + SsmApiKeys | Private, `PORTFOLIO_MODE=live` hardcoded, `PRIVATE_API_KEY` from SSM |
+| `PriceMonitorFunction` | `main.price_monitor_handler` | EventBridge every 1 min (9:00–4:59pm ET) | Dynamo + SchwabSecrets + SsmApiKeys | Auto-closes paper trades at target/stop |
+| `EndOfDayFunction` | `main.end_of_day_handler` | EventBridge 3:45pm ET | Dynamo + SchwabSecrets + SsmApiKeys | Closes all open paper trades |
+| `DailyRefreshFunction` | `main.refresh_handler` | EventBridge 9:35am ET Mon-Fri | Dynamo + SchwabSecrets + SsmApiKeys | Scanner + sentiment + synthetic briefing → DDB |
+| `DailyRefreshLiveBriefingFunction` | `main.refresh_live_briefing_handler` | EventBridge 9:35am ET Mon-Fri | Dynamo + SchwabSecrets + RobinhoodSecrets + SsmApiKeys | Live briefing with real Robinhood context → DDB |
+| `AnalyticsFunction` | `main.analytics_handler` | EventBridge nightly | Dynamo + SsmApiKeys | Phase 2 stub — not active |
+
+All functions: Python 3.13, `CodeUri: backend/`, globals inject SSM-resolved env vars.
 
 ---
 
@@ -412,7 +462,7 @@ class AnalyticsResult(BaseModel):       # Phase 2
 7. Buying Power Check (verify cash/shares before suggestion)
 8. Kill Switch (closes paper trades, flags live trades for manual close)
 
-### 14 Guardrail Tests — all must pass before TRADING_MODE=live
+### 14 Guardrail Tests — all passing, required before TRADING_MODE=live
 ```python
 def test_daily_loss_limit_blocks_new_trades()
 def test_daily_loss_limit_does_not_trigger_prematurely()
@@ -493,337 +543,107 @@ Never force a trade to hit the goal by taking disproportionate risk.
 
 ---
 
-## AWS SAM Template (`template.yaml`)
+## DynamoDB Single-Table Design
 
-```yaml
-AWSTemplateFormatVersion: '2010-09-09'
-Transform: AWS::Serverless-2016-10-31
+One table (`trading-dashboard`), three item types sharing the same GSI (`status-date-index`):
+- **Trades**: `status` = `open` | `closed` | `live`
+- **Cache**: `trade_id` = `"cache#scanner"` | `"cache#sentiment"` | `"cache#briefing"` | `"cache#briefing_live"`, `status` = `"cache"`
+- **Guardrail events**: `status` = `"guardrail_event"`
 
-Globals:
-  Function:
-    Timeout: 30
-    MemorySize: 512
-    Environment:
-      Variables:
-        PORTFOLIO_MODE: !Sub '{{resolve:ssm:/trading-app/portfolio-mode}}'
-        TRADING_MODE: !Sub '{{resolve:ssm:/trading-app/trading-mode}}'
-        PROFIT_MODE: !Sub '{{resolve:ssm:/trading-app/profit-mode}}'
-        ANTHROPIC_API_KEY: !Sub '{{resolve:ssm-secure:/trading-app/anthropic-key}}'
-        POLYGON_API_KEY: !Sub '{{resolve:ssm-secure:/trading-app/polygon-key}}'
-        FINNHUB_API_KEY: !Sub '{{resolve:ssm-secure:/trading-app/finnhub-key}}'
-        DYNAMO_TABLE_NAME: trading-dashboard
-        S3_CHARTS_BUCKET: trading-dashboard-charts
-
-Resources:
-  # Public demo API
-  TradingDashboardFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: backend/
-      Handler: main.handler
-      Runtime: python3.13
-      ReservedConcurrentExecutions: 5
-      Policies:
-        - AWSSecretsManagerGetSecretValuePolicy:
-            SecretArn: !Ref RobinhoodCredentials
-      Events:
-        Api:
-          Type: HttpApi
-          Properties:
-            Path: /{proxy+}
-            Method: ANY
-
-  # Price monitor — every 5 min, market hours
-  PriceMonitorFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: backend/
-      Handler: main.price_monitor_handler
-      Runtime: python3.13
-      ReservedConcurrentExecutions: 2
-      Events:
-        MarketHours:
-          Type: Schedule
-          Properties:
-            Schedule: cron(*/5 13-21 ? * MON-FRI *)
-
-  # End of day — 3:45pm ET
-  EndOfDayFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: backend/
-      Handler: main.end_of_day_handler
-      Runtime: python3.13
-      ReservedConcurrentExecutions: 1
-      Events:
-        EOD:
-          Type: Schedule
-          Properties:
-            Schedule: cron(45 20 ? * MON-FRI *)
-
-  # Daily 7am context refresh
-  DailyRefreshFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: backend/
-      Handler: main.refresh_handler
-      Runtime: python3.13
-      Events:
-        DailyTrigger:
-          Type: Schedule
-          Properties:
-            Schedule: cron(0 12 * * ? *)
-
-  # Nightly analytics + validation — Phase 2
-  AnalyticsFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: backend/
-      Handler: main.analytics_handler
-      Runtime: python3.13
-      Timeout: 300
-      MemorySize: 1024
-      Events:
-        NightlyAnalytics:
-          Type: Schedule
-          Properties:
-            Schedule: cron(0 22 * * ? *)    # 6pm ET
-
-  # Secrets Manager — Robinhood credentials (private Lambda only)
-  RobinhoodCredentials:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: /trading-app/robinhood-credentials
-      Description: Robinhood username and password for private Lambda
-      SecretString: '{"username": "placeholder", "password": "placeholder"}'
-  # After sam deploy, populate real values via CLI (never stored in code or git):
-  # aws secretsmanager put-secret-value \
-  #   --secret-id /trading-app/robinhood-credentials \
-  #   --secret-string '{"username": "real_user", "password": "real_pass"}'
-
-  # S3 — public frontend
-  PublicFrontendBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: trading-dashboard-public
-      WebsiteConfiguration:
-        IndexDocument: index.html
-
-  # S3 — private frontend
-  PrivateFrontendBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: trading-dashboard-private
-      WebsiteConfiguration:
-        IndexDocument: index.html
-
-  # S3 — Plotly analytics charts
-  ChartsBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: trading-dashboard-charts
-
-  # CloudFront — public
-  PublicDistribution:
-    Type: AWS::CloudFront::Distribution
-    Properties:
-      DistributionConfig:
-        Origins:
-          - DomainName: !GetAtt PublicFrontendBucket.RegionalDomainName
-            Id: PublicS3Origin
-        DefaultCacheBehavior:
-          ViewerProtocolPolicy: redirect-to-https
-          TargetOriginId: PublicS3Origin
-        Enabled: true
-        DefaultRootObject: index.html
-
-  # CloudFront — private
-  PrivateDistribution:
-    Type: AWS::CloudFront::Distribution
-    Properties:
-      DistributionConfig:
-        Origins:
-          - DomainName: !GetAtt PrivateFrontendBucket.RegionalDomainName
-            Id: PrivateS3Origin
-        DefaultCacheBehavior:
-          ViewerProtocolPolicy: redirect-to-https
-          TargetOriginId: PrivateS3Origin
-        Enabled: true
-        DefaultRootObject: index.html
-```
+Cache freshness is ET-date-based (not TTL). `cache_service._cache_is_fresh()` compares `cached_at` ISO timestamp to today's ET date.
 
 ---
 
-## GitHub Actions (`deploy.yml`)
+## Key Code Patterns
 
-```yaml
-name: Deploy Trading Dashboard
+### Backend layer contract
+Routers call services. Services never call routers. `context_loader.load_context()` is the single assembly point for the full market snapshot — called before every Claude API interaction (briefing, chat, suggest-trades).
 
-on:
-  push:
-    branches: [main]
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - uses: aws-actions/setup-sam@v2
-
-      - uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
-
-      # Deploy Lambda functions
-      - run: sam build
-      - run: sam deploy --no-confirm-changeset --no-fail-on-empty-changeset
-
-      # Build and deploy public frontend
-      - name: Build public frontend
-        run: cd frontend && npm install && npm run build
-        env:
-          VITE_API_URL: ${{ secrets.PUBLIC_API_URL }}
-          VITE_PORTFOLIO_MODE: synthetic
-
-      - name: Deploy public frontend to S3
-        run: aws s3 sync frontend/dist s3://trading-dashboard-public --delete
-
-      - name: Invalidate public CloudFront cache
-        run: |
-          aws cloudfront create-invalidation \
-            --distribution-id ${{ secrets.PUBLIC_CF_DIST_ID }} \
-            --paths "/*"
-
-      # Build and deploy private frontend
-      - name: Build private frontend
-        run: cd frontend && npm run build
-        env:
-          VITE_API_URL: ${{ secrets.PRIVATE_API_URL }}
-          VITE_PORTFOLIO_MODE: live
-
-      - name: Deploy private frontend to S3
-        run: aws s3 sync frontend/dist s3://trading-dashboard-private --delete
-
-      - name: Invalidate private CloudFront cache
-        run: |
-          aws cloudfront create-invalidation \
-            --distribution-id ${{ secrets.PRIVATE_CF_DIST_ID }} \
-            --paths "/*"
+### Portfolio factory
+```python
+# backend/services/portfolio_factory.py
+def get_provider(mode: str | None = None):
+    resolved = (mode or os.environ.get("PORTFOLIO_MODE", "synthetic")).lower()
+    if resolved == "live":
+        from services import robinhood_service
+        return robinhood_service
+    from services import synthetic_portfolio
+    return synthetic_portfolio
 ```
 
-One push to main deploys everything — Lambda functions, public frontend, private frontend. Fully automated.
+### Schwab client singleton
+`schwab_service._get_client()` initializes once per process. Lambda: token read/write via Secrets Manager (`SCHWAB_TOKEN_SECRET_ARN` env var). Local dev: token file at `backend/schwab_token.json` (gitignored).
 
----
+### API key middleware (private Lambda only)
+```python
+# backend/main.py
+_PRIVATE_API_KEY = os.environ.get("PRIVATE_API_KEY")
 
-## Environment Variables
-
-### `.env.example`
+if _PRIVATE_API_KEY:
+    @app.middleware("http")
+    async def require_api_key(request: Request, call_next):
+        if request.method == "OPTIONS" or request.url.path == "/health":
+            return await call_next(request)
+        if request.headers.get("x-api-key") != _PRIVATE_API_KEY:
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+        return await call_next(request)
 ```
-PORTFOLIO_MODE=synthetic
-TRADING_MODE=paper
-TRADE_SCOPE=holdings_only
-PROFIT_MODE=cash_intraday
-DAILY_GOAL=100
-DAILY_LOSS_LIMIT=200
-MAX_POSITION_SIZE_PCT=20
-DAILY_TRADE_LIMIT=3
-ANTHROPIC_API_KEY=
-POLYGON_API_KEY=
-FINNHUB_API_KEY=
-ROBINHOOD_USERNAME=
-ROBINHOOD_PASSWORD=
-DYNAMO_TABLE_NAME=trading-dashboard
-S3_CHARTS_BUCKET=trading-dashboard-charts
-SAGEMAKER_ENDPOINT=trading-dashboard-endpoint
-AWS_REGION=us-east-1
-```
+Inert on the public Lambda (no `PRIVATE_API_KEY` env var set).
 
-### `.env.local` (gitignored — your personal file)
-```
-PORTFOLIO_MODE=live
-TRADING_MODE=paper
-TRADE_SCOPE=holdings_only
-PROFIT_MODE=cash_intraday
-DAILY_GOAL=100
-DAILY_LOSS_LIMIT=200
-MAX_POSITION_SIZE_PCT=20
-DAILY_TRADE_LIMIT=3
-ANTHROPIC_API_KEY=your_key
-POLYGON_API_KEY=your_key
-FINNHUB_API_KEY=your_key
-ROBINHOOD_USERNAME=your_username
-ROBINHOOD_PASSWORD=your_password
-DYNAMO_TABLE_NAME=trading-dashboard
-S3_CHARTS_BUCKET=trading-dashboard-charts
-SAGEMAKER_ENDPOINT=trading-dashboard-endpoint
-AWS_REGION=us-east-1
-```
+### Frontend API utility
+```javascript
+// frontend/src/utils/api.js
+const BASE = import.meta.env.VITE_API_URL || '/api'
+const KEY  = import.meta.env.VITE_API_KEY  || ''
+const defaultHeaders = KEY ? { 'x-api-key': KEY } : {}
 
-### AWS SSM Parameters (cloud secrets — SecureString, KMS-encrypted)
+export function apiFetch(path, options = {}) {
+  const headers = { ...defaultHeaders, ...(options.headers || {}) }
+  return fetch(`${BASE}${path}`, { ...options, headers })
+}
+export const API = BASE
 ```
-/trading-app/portfolio-mode  → synthetic
-/trading-app/trading-mode    → paper
-/trading-app/profit-mode     → cash_intraday
-/trading-app/anthropic-key   → key
-/trading-app/polygon-key     → key
-/trading-app/finnhub-key     → key
-```
-
-### AWS Secrets Manager (private Lambda only)
-```
-/trading-app/robinhood-credentials  → {"username": "...", "password": "..."}
-```
-Populated manually via CLI after deploy. Never stored in code or git.
-
----
-
-## Local Development
-```bash
-# Backend — live portfolio, paper trading
-cd backend
-pip install -r requirements.txt
-uvicorn main:app --reload --env-file .env.local
-
-# Frontend
-cd frontend
-npm install
-npm run dev
-```
-
-Local: `http://localhost:8000` (API), `http://localhost:5173` (UI)
+All 8 components use `apiFetch()`. Private build injects `VITE_API_KEY` at build time.
 
 ---
 
 ## Build Order
 
-### Phase 1
-1. `main.py` + Mangum handler + health check
-2. `polygon_service.py` + scanner router + `get_intraday_movers()`
-3. `synthetic_portfolio.py` + `robinhood_service.py` + `portfolio_factory.py`
-4. `portfolio.py` router + `HoldingContext` enrichment with cost basis
-5. `finnhub_service.py` + sentiment router
-6. `guardrail_service.py` — all 8 guardrails
-7. `tests/test_guardrails.py` — all 14 tests passing
-8. `context_loader.py` — full daily context assembly
-9. `schemas.py` — all Phase 1 models
-10. `claude_service.py` + `/ai/briefing` endpoint
-11. `/ai/chat` + `/ai/suggest-trades` endpoints
-12. `paper_trading_service.py` + paper trading endpoints
-13. `live_tracking_service.py` + live trade logging endpoints
-14. React frontend — scanner, sentiment, portfolio panels
-15. `DailySummaryPanel.jsx`
-16. `ChatPanel.jsx` — suggestion cards + RH instructions
-17. `PaperTradingPanel.jsx` — 3 tabs
-18. `LiveTrackingPanel.jsx`
-19. `GuardrailsPanel.jsx`
-20. DynamoDB caching layer
-21. AWS SAM deploy — Lambda functions + S3 buckets + CloudFront distributions
-22. GitHub Actions CI/CD — deploys Lambda + both S3 frontends
-23. Cloudflare DNS + rate limiting (public) + Access auth (private)
-24. README + architecture diagram
+### Phase 1 ✅ COMPLETE
+1. ✅ `main.py` + Mangum handler + health check
+2. ✅ `schwab_service.py` + scanner router + movers
+3. ✅ `synthetic_portfolio.py` + `robinhood_service.py` + `portfolio_factory.py`
+4. ✅ `portfolio.py` router + position enrichment with cost basis
+5. ✅ `finnhub_service.py` + sentiment router
+6. ✅ `guardrail_service.py` — all 8 guardrails
+7. ✅ `tests/test_guardrails.py` — all 14 tests passing
+8. ✅ `context_loader.py` — full daily context assembly
+9. ✅ `schemas.py` — all Phase 1 models
+10. ✅ `claude_service.py` + `/ai/briefing` endpoint
+11. ✅ `/ai/chat` + `/ai/suggest-trades` endpoints
+12. ✅ `paper_trading_service.py` + paper trading endpoints
+13. ✅ `live_tracking_service.py` + live trade logging endpoints
+14. ✅ React frontend — scanner, sentiment, portfolio panels
+15. ✅ `DailySummaryPanel.jsx`
+16. ✅ `ChatPanel.jsx` — suggestion cards + RH instructions
+17. ✅ `PaperTradingPanel.jsx` — 3 tabs
+18. ✅ `LiveTrackingPanel.jsx`
+19. ✅ `GuardrailsPanel.jsx`
+20. ✅ DynamoDB caching layer (`cache_service.py`)
+21. ✅ AWS SAM deploy — Lambda functions + S3 + CloudFront
+22. ✅ GitHub Actions CI/CD — OIDC role, three parallel jobs
+23. ✅ Cloudflare DNS + rate limiting (public) + Access auth (private)
+24. ✅ README + architecture diagram
+
+### Two-Lambda Infrastructure Split (in progress — see two-lambda-implementation.md)
+- ✅ Step 1 — UUID API key generated, stored in SSM as `/trading-app/private-api-key`
+- ✅ Step 2 — `template.yaml`: SecretsPolicy split, TradingDashboardPrivateFunction added, DailyRefreshLiveBriefingFunction added
+- ✅ Step 3 — `main.py` x-api-key middleware
+- ⬜ Step 4b — Migrate 8 frontend components to `apiFetch` (Step 4a done: `utils/api.js` exists)
+- ⬜ Step 5 — `deploy.yml` `VITE_API_KEY` line
+- ⬜ Step 6 — Add `PRIVATE_API_KEY` GitHub Secret (do before pushing)
+- ⬜ Step 7 — `sam deploy`, capture `PrivateFunctionUrl`, update `PRIVATE_API_URL` secret
+- ⬜ Step 8 — Verification
 
 ### Phase 2
 25. `validation_service.py` + validation endpoints
@@ -857,11 +677,11 @@ Local: `http://localhost:8000` (API), `http://localhost:5173` (UI)
 
 ### Phase 1 → Phase 2
 ```
-□ 4-6 weeks paper trading data
-□ Basic win rate and P&L metrics stable
-□ All 14 guardrail tests passing
-□ Daily workflow established
-□ 3:45pm alarm habit consistent
+✅ 4-6 weeks paper trading data
+✅ Basic win rate and P&L metrics stable
+✅ All 14 guardrail tests passing
+✅ Daily workflow established
+✅ 3:45pm alarm habit consistent
 ```
 
 ### Phase 2 → Phase 3
@@ -892,15 +712,15 @@ Local: `http://localhost:8000` (API), `http://localhost:5173` (UI)
 
 ## AWS Services Used (Resume / Portfolio)
 ```
-Compute:      Lambda, API Gateway
+Compute:      Lambda (7 functions), API Gateway (legacy fallback)
 Storage:      S3 (3 buckets), DynamoDB
-CDN:          CloudFront
+CDN:          CloudFront (2 distributions)
 Scheduler:    EventBridge
-ML:           SageMaker (Phase 2)
-Security:     IAM, SSM Parameter Store (SecureString), Secrets Manager, KMS
+Security:     IAM (OIDC deploy role, scoped execution roles), SSM Parameter Store (SecureString), Secrets Manager, KMS
 IaC:          SAM (CloudFormation)
-CI/CD:        GitHub Actions
-External:     Cloudflare (DNS, CDN security, Access auth)
+CI/CD:        GitHub Actions (OIDC, no long-lived keys)
+External:     Cloudflare (DNS, CDN security, Access auth), Porkbun (registrar)
+ML:           SageMaker (Phase 2)
 ```
 
 ---
@@ -921,65 +741,19 @@ External:     Cloudflare (DNS, CDN security, Access auth)
 
 ---
 
-## README (Portfolio-Ready)
-```
-# AI Trading Dashboard
-
-A personal AI-assisted stock trading tool built on a fully serverless
-AWS infrastructure stack.
-
-## Tech Stack
-FastAPI · Python 3.13 · Anthropic Claude API · AWS Lambda · API Gateway ·
-DynamoDB · S3 · CloudFront · EventBridge · SageMaker · SAM · GitHub Actions ·
-Cloudflare · Polygon.io · Finnhub
-
-## Problem
-Retail traders lack affordable access to the scanning, sentiment analysis,
-AI synthesis, and quantitative validation that institutional desks use daily.
-Commercial tools solving this cost $200-400/month.
-
-## Solution
-A personal dashboard that scans stocks, scores news sentiment, and provides
-a conversational interface where the user asks Claude to generate trade
-suggestions targeting a daily cash P&L goal. Validated against market
-benchmarks, modeled with Monte Carlo simulation, and enhanced with a
-SageMaker ML probability layer. Deployed fully serverlessly for ~$1-12/month.
-
-## Architecture
-[diagram — fully serverless AWS, two CloudFront/S3 deployments,
- 5 Lambda functions, Cloudflare security layer]
-
-## Key Features
-- Morning AI briefing + conversational trade queries
-- Holdings-only mode with cost basis protection
-- Structured suggestion cards with Robinhood placement instructions
-- Paper trading engine on real Polygon.io market data
-- SPY benchmark + random baseline + slippage validation
-- Monte Carlo simulation, Kelly Criterion, conditions analysis
-- SageMaker ML trade probability scoring
-- 8 production guardrails tested before real money
-- Public demo + private personal version from one codebase
-- Fully serverless — runs whether laptop is on or not
-
-## Phased Roadmap
-Phase 1: Core app + paper trading (~$1/mo)
-Phase 2: Validation + analytics + SageMaker init (~$4-7/mo)
-Phase 3: Live trading small size + ML calibration
-Phase 4: Full live trading + ML active + Alpaca option (~$6-12/mo)
-
-## Live Demo
-[yourapp.com]
-
-## Local Setup
-...
-
-## Going Live Checklist
-[transition checklists above]
-```
+## Key Constraints (always enforce)
+- **Never commit** `.env.local` or `schwab_token.json` — both gitignored
+- **`TRADING_MODE=live`** requires explicit user confirmation before switching
+- **Live trades are never auto-closed** — price monitor and EOD handler flag them; user closes manually in Robinhood
+- **black line length is 100** — CI lint uses `--line-length=100`; default 88 will fail
+- **`sam build` runs from repo root** — `template.yaml` is there, not in `backend/`
+- **`pytest` needs `working-directory: backend`** — service imports only resolve from `backend/`
+- **`claude-sonnet-4-6`** — do not downgrade the model
 
 ---
 
 ## Future Considerations
 
 - **Native CloudFormation IaC practice:** SAM generates and deploys CloudFormation under the hood. At some point, consider writing infrastructure directly in native CloudFormation (without SAM abstractions) as a hands-on IaC exercise — useful for AWS SAA-C03 depth and portfolio.
-- **Lambda vs. Batch (confirmed: Lambda):** All functions are correctly Lambda. The heaviest is the nightly Analytics Lambda (Phase 2, 5-min timeout, 1024MB) running Monte Carlo + benchmarks + Plotly charts. At personal-trader scale (~400 trades over 6 months), NumPy/Pandas/SciPy operations complete in well under 1 minute — far below the timeout. Batch would add Docker/ECR/ECS overhead, minute-scale cold starts, and complexity with no benefit. Only revisit if the Analytics Lambda actually times out in production. SageMaker handles heavy ML training (Phase 2+) — Lambda and Batch are both wrong for that.
+- **Lambda vs. Batch (confirmed: Lambda):** All functions are correctly Lambda. The heaviest is the nightly Analytics Lambda (Phase 2, 5-min timeout, 1024MB). At personal-trader scale, NumPy/Pandas/SciPy operations complete well under the timeout. Only revisit if the Analytics Lambda actually times out in production. SageMaker handles heavy ML training.
+- **Trade scope expansion:** `TRADE_SCOPE=holdings_only` currently restricts suggestions to existing holdings. Changing to `open` or `both` will allow Claude to suggest entries from the daily scanner. Do after verifying real portfolio data flows correctly through the private Lambda.

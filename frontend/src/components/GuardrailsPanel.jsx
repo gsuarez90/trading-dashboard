@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-
-const API = import.meta.env.VITE_API_URL || '/api'
+import { apiFetch } from '../utils/api'
 
 const RULE_LABELS = {
   daily_loss_limit:     'Daily Loss Limit',
@@ -132,7 +131,7 @@ function KillSwitch() {
     if (!confirm) { setConfirm(true); return }
     setBusy(true)
     setError(null)
-    fetch(`${API}/guardrails/kill-switch?confirmed=true`, { method: 'POST' })
+    apiFetch('/guardrails/kill-switch?confirmed=true', { method: 'POST' })
       .then(r => r.ok ? r.json() : r.json().then(e => Promise.reject(e.detail ?? r.statusText)))
       .then(data => { setResult(data); setBusy(false); setConfirm(false) })
       .catch(e => { setError(String(e)); setBusy(false); setConfirm(false) })
@@ -189,8 +188,8 @@ export default function GuardrailsPanel() {
     setLoading(true)
     setError(null)
     Promise.all([
-      fetch(`${API}/guardrails/status`, { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
-      fetch(`${API}/guardrails/events`, { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
+      apiFetch('/guardrails/status', { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
+      apiFetch('/guardrails/events', { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
     ])
       .then(([s, e]) => { setStatus(s); setEvents(e); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })

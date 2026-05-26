@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-
-const API = import.meta.env.VITE_API_URL || '/api'
+import { apiFetch } from '../utils/api'
 
 function labelClass(label) {
   if (label === 'bullish') return 'up'
@@ -14,7 +13,7 @@ export default function SentimentFeed() {
   const [error, setError] = useState(null)
 
   useEffect(() => {
-    fetch(`${API}/ai/sentiment`)
+    apiFetch('/ai/sentiment')
       .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
       .then(data => { setRows(data.sentiment || []); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })

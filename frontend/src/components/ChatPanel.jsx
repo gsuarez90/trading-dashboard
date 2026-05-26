@@ -1,7 +1,6 @@
 import { useRef, useState } from 'react'
 import { useMarketStatus } from '../utils/market'
-
-const API = import.meta.env.VITE_API_URL || '/api'
+import { apiFetch } from '../utils/api'
 
 const CONFIDENCE_STYLE = {
   high:   { background: '#1a3a2a', color: '#3fb950' },
@@ -20,7 +19,7 @@ function SuggestionCard({ trade, isRecommended, allowLoss }) {
   function paperTrade() {
     setSubmitting(true)
     setSubmitErr(null)
-    fetch(`${API}/paper-trades/`, {
+    apiFetch('/paper-trades/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ setup: trade, allow_loss: allowLoss ?? false }),
@@ -139,7 +138,7 @@ function SuggestTab() {
   function fetchSuggestions() {
     setLoading(true)
     setError(null)
-    fetch(`${API}/ai/suggest-trades`, {
+    apiFetch('/ai/suggest-trades', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ allow_loss: allowLoss }),
@@ -236,7 +235,7 @@ function ChatTab() {
     setMessages(next)
     setInput('')
     setLoading(true)
-    fetch(`${API}/ai/chat`, {
+    apiFetch('/ai/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: text }),

@@ -28,6 +28,19 @@ schwab_token.json
 .claude/
 .playwright-mcp/
 
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editor backups
+*.bak
+*.swp
+*.swo
+
+# Local planning notes (not part of repo)
+some-things-to-implement.md
+
 # Misc
 *.png
 *.log

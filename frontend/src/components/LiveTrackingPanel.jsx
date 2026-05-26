@@ -1,6 +1,5 @@
 import { useCallback, useState } from 'react'
-
-const API = import.meta.env.VITE_API_URL || '/api'
+import { apiFetch } from '../utils/api'
 
 const DIR_STYLE = {
   long:  { background: '#1a3a2a', color: '#3fb950' },
@@ -110,7 +109,7 @@ function OpenRow({ trade, onClose }) {
     if (isNaN(p) || p <= 0) { setErr('Enter a valid price'); return }
     setBusy(true)
     setErr(null)
-    fetch(`${API}/live-trades/${trade.trade_id}/exit`, {
+    apiFetch(`/live-trades/${trade.trade_id}/exit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ exit_price: p, close_reason: 'manual' }),
@@ -274,8 +273,8 @@ export default function LiveTrackingPanel() {
     setLoading(true)
     setError(null)
     Promise.all([
-      fetch(`${API}/live-trades/`, { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
-      fetch(`${API}/live-trades/summary`, { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
+      apiFetch('/live-trades/', { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
+      apiFetch('/live-trades/summary', { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
     ])
       .then(([t, s]) => { setTrades(t); setSummary(s); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })

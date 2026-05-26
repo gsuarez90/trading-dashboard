@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useMarketStatus } from '../utils/market'
-
-const API = import.meta.env.VITE_API_URL || '/api'
+import { apiFetch } from '../utils/api'
 const POLL_INTERVAL = 60_000
 
 export default function ScannerPanel() {
@@ -14,7 +13,7 @@ export default function ScannerPanel() {
   const load = useCallback(() => {
     setLoading(true)
     setError(null)
-    fetch(`${API}/scanner/movers`)
+    apiFetch('/scanner/movers')
       .then(r => r.ok ? r.json() : r.json().then(b => Promise.reject(b.detail || r.statusText)))
       .then(data => { setMovers(data); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })

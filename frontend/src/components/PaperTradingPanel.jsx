@@ -1,6 +1,5 @@
 import { useCallback, useState } from 'react'
-
-const API = import.meta.env.VITE_API_URL || '/api'
+import { apiFetch } from '../utils/api'
 
 const DIR_STYLE = {
   long:  { background: '#1a3a2a', color: '#3fb950' },
@@ -95,7 +94,7 @@ function OpenRow({ trade, onClose }) {
     if (isNaN(p) || p <= 0) { setErr('Enter a valid price'); return }
     setBusy(true)
     setErr(null)
-    fetch(`${API}/paper-trades/${trade.trade_id}/close`, {
+    apiFetch(`/paper-trades/${trade.trade_id}/close`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ exit_price: p, close_reason: 'manual' }),
@@ -311,9 +310,9 @@ export default function PaperTradingPanel() {
     setLoading(true)
     setError(null)
     Promise.all([
-      fetch(`${API}/paper-trades/`, { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
-      fetch(`${API}/paper-trades/pending`, { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
-      fetch(`${API}/paper-trades/summary`, { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
+      apiFetch('/paper-trades/', { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
+      apiFetch('/paper-trades/pending', { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
+      apiFetch('/paper-trades/summary', { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
     ])
       .then(([t, p, s]) => { setTrades(t); setPending(p); setSummary(s); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })

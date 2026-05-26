@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useMarketStatus } from '../utils/market'
-
-const API = import.meta.env.VITE_API_URL || '/api'
+import { apiFetch } from '../utils/api'
 
 export default function DailySummaryPanel() {
   const [data, setData]         = useState(null)
@@ -12,7 +11,7 @@ export default function DailySummaryPanel() {
   function fetchBriefing() {
     setLoading(true)
     setError(null)
-    fetch(`${API}/ai/briefing`)
+    apiFetch('/ai/briefing')
       .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
       .then(d => { setData(d); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })

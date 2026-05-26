@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -6,6 +7,7 @@ load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env.local")  
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from mangum import Mangum
 from starlette.requests import Request
 
@@ -35,6 +37,18 @@ async def strip_trailing_slash(request: Request, call_next):
     if request.url.path != "/" and request.url.path.endswith("/"):
         request.scope["path"] = request.url.path.rstrip("/")
     return await call_next(request)
+
+
+_PRIVATE_API_KEY = os.environ.get("PRIVATE_API_KEY")
+
+if _PRIVATE_API_KEY:
+    @app.middleware("http")
+    async def require_api_key(request: Request, call_next):
+        if request.method == "OPTIONS" or request.url.path == "/health":
+            return await call_next(request)
+        if request.headers.get("x-api-key") != _PRIVATE_API_KEY:
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+        return await call_next(request)
 
 
 try:

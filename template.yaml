@@ -145,7 +145,7 @@ Resources:
               - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/trading-dashboard'
               - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/trading-dashboard/index/*'
 
-  SecretsPolicy:
+  SchwabSecretsPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
       PolicyDocument:
@@ -157,7 +157,23 @@ Resources:
               - secretsmanager:PutSecretValue
             Resource:
               - !Ref SchwabTokenSecret
+
+  RobinhoodSecretsPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource:
               - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/trading-app/robinhood-credentials*'
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+              - secretsmanager:PutSecretValue
+            Resource:
               - !Ref RobinhoodSessionSecret
 
   SsmApiKeysPolicy:
@@ -184,7 +200,7 @@ Resources:
 
   # ── Lambda functions ──────────────────────────────────────────────────────────
 
-  # Main API — handles all HTTP requests from CloudFront / API Gateway or Function URL
+  # Main API — public Lambda (synthetic portfolio, no Robinhood IAM access)
   TradingDashboardFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -195,7 +211,7 @@ Resources:
         AuthType: NONE
       Policies:
         - !Ref DynamoPolicy
-        - !Ref SecretsPolicy
+        - !Ref SchwabSecretsPolicy
         - !Ref SsmApiKeysPolicy
       Events:
         Api:
@@ -205,6 +221,25 @@ Resources:
             Method: ANY
             ApiId: !Ref TradingHttpApi
 
+  # Private API — live Lambda (real Robinhood portfolio, x-api-key required)
+  TradingDashboardPrivateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: main.handler
+      Timeout: 120
+      MemorySize: 1536
+      FunctionUrlConfig:
+        AuthType: NONE
+      Environment:
+        Variables:
+          PORTFOLIO_MODE: live
+          PRIVATE_API_KEY: !Sub '{{resolve:ssm:/trading-app/private-api-key}}'
+      Policies:
+        - !Ref DynamoPolicy
+        - !Ref SchwabSecretsPolicy
+        - !Ref RobinhoodSecretsPolicy
+        - !Ref SsmApiKeysPolicy
+
   # Price monitor — every 1 min during market hours (9:00am–4:59pm ET = 13:00–20:59 UTC)
   PriceMonitorFunction:
     Type: AWS::Serverless::Function
@@ -212,7 +247,7 @@ Resources:
       Handler: main.price_monitor_handler
       Policies:
         - !Ref DynamoPolicy
-        - !Ref SecretsPolicy
+        - !Ref SchwabSecretsPolicy
         - !Ref SsmApiKeysPolicy
       Events:
         MarketHours:
@@ -227,7 +262,7 @@ Resources:
       Handler: main.end_of_day_handler
       Policies:
         - !Ref DynamoPolicy
-        - !Ref SecretsPolicy
+        - !Ref SchwabSecretsPolicy
         - !Ref SsmApiKeysPolicy
       Events:
         EOD:
@@ -245,7 +280,28 @@ Resources:
       MemorySize: 1536
       Policies:
         - !Ref DynamoPolicy
-        - !Ref SecretsPolicy
+        - !Ref SchwabSecretsPolicy
+        - !Ref SsmApiKeysPolicy
+      Events:
+        DailyTrigger:
+          Type: Schedule
+          Properties:
+            Schedule: cron(35 13 ? * MON-FRI *)
+
+  # Daily 9:35am ET — live briefing for private URL (same cron, PORTFOLIO_MODE=live)
+  DailyRefreshLiveBriefingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: main.refresh_live_briefing_handler
+      Timeout: 120
+      MemorySize: 1536
+      Environment:
+        Variables:
+          PORTFOLIO_MODE: live
+      Policies:
+        - !Ref DynamoPolicy
+        - !Ref SchwabSecretsPolicy
+        - !Ref RobinhoodSecretsPolicy
         - !Ref SsmApiKeysPolicy
       Events:
         DailyTrigger:
@@ -370,8 +426,11 @@ Resources:
 
 Outputs:
   FunctionUrl:
-    Description: Lambda Function URL (no 29s ceiling) — use for PUBLIC_API_URL and PRIVATE_API_URL GitHub secrets
+    Description: Public Lambda Function URL (no 29s ceiling) — use for PUBLIC_API_URL GitHub secret
     Value: !GetAtt TradingDashboardFunctionUrl.FunctionUrl
+  PrivateFunctionUrl:
+    Description: Private Lambda Function URL — use for PRIVATE_API_URL GitHub secret
+    Value: !GetAtt TradingDashboardPrivateFunctionUrl.FunctionUrl
   ApiUrl:
     Description: API Gateway endpoint URL (legacy — kept for rollback; ceiling is 29s)
     Value: !Sub 'https://${TradingHttpApi}.execute-api.${AWS::Region}.amazonaws.com'
