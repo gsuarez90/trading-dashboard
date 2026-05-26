@@ -233,7 +233,7 @@ Resources:
       Environment:
         Variables:
           PORTFOLIO_MODE: live
-          PRIVATE_API_KEY: !Sub '{{resolve:ssm:/trading-app/private-api-key}}'
+          PRIVATE_API_KEY: !Sub '{{resolve:ssm-secure:/trading-app/private-api-key}}'
       Policies:
         - !Ref DynamoPolicy
         - !Ref SchwabSecretsPolicy
