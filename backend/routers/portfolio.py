@@ -1,3 +1,4 @@
+import traceback
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -50,6 +51,7 @@ def get_portfolio(mode: Optional[str] = Query(default=None)):
         portfolio["positions"] = _enrich_positions(portfolio.get("positions", []))
         return portfolio
     except Exception as e:
+        print(traceback.format_exc())
         raise HTTPException(status_code=502, detail=f"Portfolio fetch failed: {e}")
 
 
