@@ -11,6 +11,7 @@ on:
       - 'frontend/**'
       - 'template.yaml'
       - 'samconfig.toml'
+  workflow_dispatch:
 
 jobs:
   backend:
