@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
+import { Badge, Paper, ScrollArea, Table, Text } from '@mantine/core'
 import { apiFetch } from '../utils/api'
 
-function labelClass(label) {
-  if (label === 'bullish') return 'up'
-  if (label === 'bearish') return 'down'
-  return 'neutral'
+function sentimentColor(label) {
+  if (label === 'bullish') return 'green'
+  if (label === 'bearish') return 'red'
+  return 'gray'
 }
 
 export default function SentimentFeed() {
@@ -20,44 +21,63 @@ export default function SentimentFeed() {
   }, [])
 
   return (
-    <div className="panel">
-      <h2>Sentiment — 3-Day News</h2>
+    <Paper p="md">
+      <Text size="xs" fw={600} tt="uppercase" c="dimmed" mb="xs">
+        Sentiment — 3-Day News
+      </Text>
 
-      {loading && <p className="status">Loading…</p>}
-      {error   && <p className="error">Error: {error}</p>}
+      {loading && <Text c="dimmed" size="sm" py="xs">Loading…</Text>}
+      {error && <Text c="red" size="sm" py="xs">Error: {error}</Text>}
 
       {!loading && !error && rows.length === 0 && (
-        <p className="status">No sentiment data.</p>
+        <Text c="dimmed" size="sm" py="xs">No sentiment data.</Text>
       )}
 
       {rows.length > 0 && (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Ticker</th>
-                <th>Score</th>
-                <th>Label</th>
-                <th>Articles</th>
-              </tr>
-            </thead>
-            <tbody>
+        <ScrollArea>
+          <Table
+            highlightOnHover
+            style={{ fontSize: 12, fontFamily: 'var(--mono)', whiteSpace: 'nowrap' }}
+          >
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>Ticker</Table.Th>
+                <Table.Th>Score</Table.Th>
+                <Table.Th>Label</Table.Th>
+                <Table.Th>Articles</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
               {rows.map(r => (
-                <tr key={r.ticker}>
-                  <td><strong>{r.ticker}</strong></td>
-                  <td className={labelClass(r.label)}>{r.score?.toFixed(4)}</td>
-                  <td>
-                    <span className={`badge badge-${r.label === 'bullish' ? 'positive' : r.label === 'bearish' ? 'negative' : 'neutral'}`}>
+                <Table.Tr key={r.ticker}>
+                  <Table.Td fw={700}>{r.ticker}</Table.Td>
+                  <Table.Td>
+                    <Text
+                      size="xs"
+                      c={sentimentColor(r.label)}
+                      ff="mono"
+                      inherit
+                    >
+                      {r.score?.toFixed(4)}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Badge
+                      color={sentimentColor(r.label)}
+                      size="xs"
+                      radius="xl"
+                      variant="light"
+                    >
                       {r.label}
-                    </span>
-                  </td>
-                  <td>{r.article_count}</td>
-                </tr>
+                    </Badge>
+                  </Table.Td>
+                  <Table.Td>{r.article_count}</Table.Td>
+                </Table.Tr>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </Table.Tbody>
+          </Table>
+        </ScrollArea>
       )}
-    </div>
+    </Paper>
   )
 }

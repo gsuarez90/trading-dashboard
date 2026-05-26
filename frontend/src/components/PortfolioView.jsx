@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Button, Group, Paper, ScrollArea, Table, Text } from '@mantine/core'
 import { apiFetch } from '../utils/api'
 
 const MODE = import.meta.env.VITE_PORTFOLIO_MODE || 'synthetic'
@@ -30,66 +31,72 @@ export default function PortfolioView() {
   const positions = portfolio?.positions || []
 
   return (
-    <div className="panel">
-      <div className="panel-header" style={{ marginBottom: 12 }}>
-        <h2 style={{ margin: 0 }}>Portfolio</h2>
-        <button onClick={load} disabled={loading} style={{
-          background: 'none', border: '1px solid var(--border)', borderRadius: 'var(--radius)',
-          color: loading ? 'var(--text-muted)' : 'var(--text)', padding: '3px 10px',
-          fontSize: 11, cursor: loading ? 'default' : 'pointer',
-        }}>
+    <Paper p="md">
+      <Group justify="space-between" mb="xs">
+        <Text size="xs" fw={600} tt="uppercase" c="dimmed">Portfolio</Text>
+        <Button variant="subtle" size="xs" onClick={load} disabled={loading}>
           {loading ? 'Loading…' : 'Refresh'}
-        </button>
-      </div>
+        </Button>
+      </Group>
 
-      {error && <p className="error">Error: {error}</p>}
+      {error && <Text c="red" size="sm" py="xs">Error: {error}</Text>}
 
       {portfolio && (
         <>
-          <p style={{ marginBottom: 12, fontFamily: 'var(--mono)', fontSize: 13 }}>
-            Cash: <strong>${portfolio.cash?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
-          </p>
+          <Text size="sm" ff="mono" mb="xs">
+            Cash:{' '}
+            <Text span fw={700} ff="mono">
+              ${portfolio.cash?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </Text>
+          </Text>
 
           {positions.length === 0 ? (
-            <p className="status">No open positions.</p>
+            <Text c="dimmed" size="sm" py="xs">No open positions.</Text>
           ) : (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Ticker</th>
-                    <th>Shares</th>
-                    <th>Avg Cost</th>
-                    <th>Price</th>
-                    <th>Unreal. P&L</th>
-                    <th>%</th>
-                  </tr>
-                </thead>
-                <tbody>
+            <ScrollArea>
+              <Table
+                highlightOnHover
+                style={{ fontSize: 12, fontFamily: 'var(--mono)', whiteSpace: 'nowrap' }}
+              >
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>Ticker</Table.Th>
+                    <Table.Th>Shares</Table.Th>
+                    <Table.Th>Avg Cost</Table.Th>
+                    <Table.Th>Price</Table.Th>
+                    <Table.Th>Unreal. P&L</Table.Th>
+                    <Table.Th>%</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
                   {positions.map(p => (
-                    <tr key={p.ticker}>
-                      <td><strong>{p.ticker}</strong></td>
-                      <td>{p.shares}</td>
-                      <td>${p.avg_cost?.toFixed(2)}</td>
-                      <td>${p.current_price?.toFixed(2) ?? '—'}</td>
-                      <td className={p.unrealized_pnl >= 0 ? 'up' : 'down'}>
-                        {p.unrealized_pnl != null
-                          ? `${p.unrealized_pnl >= 0 ? '+' : ''}$${p.unrealized_pnl.toFixed(2)}`
-                          : '—'}
-                      </td>
-                      <td className={p.unrealized_pnl_pct >= 0 ? 'up' : 'down'}>
-                        {p.unrealized_pnl_pct != null
-                          ? `${p.unrealized_pnl_pct >= 0 ? '+' : ''}${p.unrealized_pnl_pct.toFixed(2)}%`
-                          : '—'}
-                      </td>
-                    </tr>
+                    <Table.Tr key={p.ticker}>
+                      <Table.Td fw={700}>{p.ticker}</Table.Td>
+                      <Table.Td>{p.shares}</Table.Td>
+                      <Table.Td>${p.avg_cost?.toFixed(2)}</Table.Td>
+                      <Table.Td>${p.current_price?.toFixed(2) ?? '—'}</Table.Td>
+                      <Table.Td>
+                        <Text size="xs" c={p.unrealized_pnl >= 0 ? 'green' : 'red'} ff="mono" inherit>
+                          {p.unrealized_pnl != null
+                            ? `${p.unrealized_pnl >= 0 ? '+' : ''}$${p.unrealized_pnl.toFixed(2)}`
+                            : '—'}
+                        </Text>
+                      </Table.Td>
+                      <Table.Td>
+                        <Text size="xs" c={p.unrealized_pnl_pct >= 0 ? 'green' : 'red'} ff="mono" inherit>
+                          {p.unrealized_pnl_pct != null
+                            ? `${p.unrealized_pnl_pct >= 0 ? '+' : ''}${p.unrealized_pnl_pct.toFixed(2)}%`
+                            : '—'}
+                        </Text>
+                      </Table.Td>
+                    </Table.Tr>
                   ))}
-                </tbody>
-              </table>
-            </div>
+                </Table.Tbody>
+              </Table>
+            </ScrollArea>
           )}
         </>
       )}
-    </div>
+    </Paper>
   )
 }

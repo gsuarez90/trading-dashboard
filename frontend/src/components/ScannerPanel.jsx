@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Badge, Button, Group, Paper, ScrollArea, Table, Text } from '@mantine/core'
 import { useMarketStatus } from '../utils/market'
 import { apiFetch } from '../utils/api'
+
 const POLL_INTERVAL = 60_000
 
 export default function ScannerPanel() {
@@ -29,60 +31,66 @@ export default function ScannerPanel() {
   }, [load])
 
   return (
-    <div className="panel">
-      <div className="panel-header" style={{ marginBottom: 12 }}>
-        <h2 style={{ margin: 0 }}>Scanner — Top Movers</h2>
-        <button onClick={load} disabled={loading} style={{
-          background: 'none', border: '1px solid var(--border)', borderRadius: 'var(--radius)',
-          color: loading ? 'var(--text-muted)' : 'var(--text)', padding: '3px 10px',
-          fontSize: 11, cursor: loading ? 'default' : 'pointer',
-        }}>
+    <Paper p="md">
+      <Group justify="space-between" mb="xs">
+        <Text size="xs" fw={600} tt="uppercase" c="dimmed">Scanner — Top Movers</Text>
+        <Button variant="subtle" size="xs" onClick={load} disabled={loading}>
           {loading ? 'Loading…' : 'Refresh'}
-        </button>
-      </div>
+        </Button>
+      </Group>
 
-      {error && <p className="error">Error: {error}</p>}
+      {error && <Text c="red" size="sm" py="xs">Error: {error}</Text>}
 
       {!loading && !error && movers.length === 0 && (
-        <p className="status">No movers found.</p>
+        <Text c="dimmed" size="sm" py="xs">No movers found.</Text>
       )}
 
       {!loading && !error && movers.length > 0 && !open && (
-        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
+        <Text size="xs" c="dimmed" mb="xs">
           Last trading day data — market closed{closedRange ? ` (${closedRange})` : ''}.
-        </p>
+        </Text>
       )}
 
       {movers.length > 0 && (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Ticker</th>
-                <th>Price</th>
-                <th>Change %</th>
-                <th>Volume</th>
-                <th>High</th>
-                <th>Low</th>
-              </tr>
-            </thead>
-            <tbody>
+        <ScrollArea>
+          <Table
+            highlightOnHover
+            style={{ fontSize: 12, fontFamily: 'var(--mono)', whiteSpace: 'nowrap' }}
+          >
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>Ticker</Table.Th>
+                <Table.Th>Price</Table.Th>
+                <Table.Th>Change %</Table.Th>
+                <Table.Th>Volume</Table.Th>
+                <Table.Th>High</Table.Th>
+                <Table.Th>Low</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
               {movers.map(m => (
-                <tr key={m.ticker}>
-                  <td><strong>{m.ticker}</strong></td>
-                  <td>${m.price?.toFixed(2)}</td>
-                  <td className={m.change_pct >= 0 ? 'up' : 'down'}>
-                    {m.change_pct >= 0 ? '+' : ''}{m.change_pct?.toFixed(2)}%
-                  </td>
-                  <td>{m.volume?.toLocaleString()}</td>
-                  <td>${m.high?.toFixed(2)}</td>
-                  <td>${m.low?.toFixed(2)}</td>
-                </tr>
+                <Table.Tr key={m.ticker}>
+                  <Table.Td fw={700}>{m.ticker}</Table.Td>
+                  <Table.Td>${m.price?.toFixed(2)}</Table.Td>
+                  <Table.Td>
+                    <Text
+                      size="xs"
+                      c={m.change_pct >= 0 ? 'green' : 'red'}
+                      ff="mono"
+                      inherit
+                    >
+                      {m.change_pct >= 0 ? '+' : ''}{m.change_pct?.toFixed(2)}%
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>{m.volume?.toLocaleString()}</Table.Td>
+                  <Table.Td>${m.high?.toFixed(2)}</Table.Td>
+                  <Table.Td>${m.low?.toFixed(2)}</Table.Td>
+                </Table.Tr>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </Table.Tbody>
+          </Table>
+        </ScrollArea>
       )}
-    </div>
+    </Paper>
   )
 }

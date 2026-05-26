@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Button, Group, Paper, Text } from '@mantine/core'
 import { useMarketStatus } from '../utils/market'
 import { apiFetch } from '../utils/api'
 
@@ -25,61 +26,51 @@ export default function DailySummaryPanel() {
   const marketOpen = minsLeft != null && minsLeft > 0
 
   return (
-    <div className="panel">
-      <div className="panel-header" style={{ marginBottom: expanded ? 12 : 0 }}>
-        <button onClick={() => setExpanded(e => !e)} style={{
-          background: 'none', border: 'none', cursor: 'pointer',
-          display: 'flex', alignItems: 'center', gap: 6, padding: 0,
-        }}>
-          <span style={{ fontSize: 10, color: 'var(--text-muted)', lineHeight: 1 }}>
-            {expanded ? '▼' : '▶'}
-          </span>
-          <h2 style={{ margin: 0 }}>Morning Briefing</h2>
+    <Paper p="md">
+      <Group justify="space-between" mb={expanded ? 'xs' : 0}>
+        <button
+          onClick={() => setExpanded(e => !e)}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, padding: 0 }}
+        >
+          <Text size="xs" c="dimmed" lh={1}>{expanded ? '▼' : '▶'}</Text>
+          <Text size="xs" fw={600} tt="uppercase" c="dimmed">Morning Briefing</Text>
         </button>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <Group gap="xs">
           {data && (
-            <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--mono)' }}>
+            <Text size="xs" c="dimmed" ff="mono">
               {data.date}
               {minsLeft != null && (
-                <span style={{ marginLeft: 8, color: marketOpen ? 'var(--green)' : 'var(--text-muted)' }}>
+                <Text span c={marketOpen ? 'green' : 'dimmed'} ml={8}>
                   {marketOpen ? `${minsLeft}m remaining` : 'Market closed'}
-                </span>
+                </Text>
               )}
-            </span>
+            </Text>
           )}
-          <button onClick={fetchBriefing} disabled={loading} style={{
-            background: 'none',
-            border: '1px solid var(--border)',
-            color: loading ? 'var(--text-muted)' : 'var(--text)',
-            borderRadius: 'var(--radius)',
-            padding: '3px 10px',
-            fontSize: 11,
-            cursor: loading ? 'default' : 'pointer',
-          }}>
+          <Button variant="subtle" size="xs" onClick={fetchBriefing} disabled={loading}>
             {loading ? 'Loading…' : 'Refresh'}
-          </button>
-        </div>
-      </div>
+          </Button>
+        </Group>
+      </Group>
 
       {expanded && (
         <>
-          {error && <p className="error">Error: {error}</p>}
+          {error && <Text c="red" size="sm" py="xs">Error: {error}</Text>}
           {!error && data && data.briefing && marketOpen && (
-            <p style={{ whiteSpace: 'pre-wrap', lineHeight: 1.7, fontSize: 13, color: 'var(--text)' }}>
+            <Text size="sm" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>
               {data.briefing}
-            </p>
+            </Text>
           )}
           {!error && data && (!marketOpen || !data.briefing) && (
-            <p className="status">
+            <Text c="dimmed" size="sm" py="xs">
               {isTodayTradingDay
                 ? 'Market closed — new briefing at market open (~9:35 AM ET).'
                 : `Market closed — next briefing ${nextOpenDate}, ~9:35 AM ET.`}
-            </p>
+            </Text>
           )}
-          {loading && <p className="status">Loading…</p>}
+          {loading && <Text c="dimmed" size="sm" py="xs">Loading…</Text>}
         </>
       )}
-    </div>
+    </Paper>
   )
 }
