@@ -4,7 +4,7 @@ My personal trading assistant. Built to run my daily workflow — morning briefi
 
 This isn't a SaaS product. It's built for one user (me). Every design decision is about building discipline before putting real money in: paper trade on real Schwab data, prove the process works, then go live.
 
-The app runs as two separate deployments. The **public version** at [ait.gsuarez.dev](https://ait.gsuarez.dev) uses synthetic portfolio data and is open to anyone. The **private version** connects to my real brokerage and sits behind Cloudflare Access — email one-time-PIN, no one else gets in. Same codebase, same backend, different `PORTFOLIO_MODE` env var baked into the frontend build.
+The app runs as two separate deployments backed by two separate Lambda functions. The **public version** at [ait.gsuarez.dev](https://ait.gsuarez.dev) uses synthetic portfolio data and is open to anyone — its Lambda has no IAM access to live credentials. The **private version** connects to my real brokerage and sits behind Cloudflare Access — email one-time-PIN, no one else gets in. Its Lambda runs with `PORTFOLIO_MODE=live`, has Robinhood IAM access, and requires a shared secret (`x-api-key` header) on every request. Same codebase, two isolated execution environments.
 
 The bar before going live: win rate above 55%, R/R above 1.5, beating SPY more than 60% of days. Claude helps with briefings and suggestions but never touches orders. Every trade is manual. The guardrail system enforces the rules automatically so I can't override them on a bad day.
 
@@ -35,12 +35,12 @@ The bar before going live: win rate above 55%, R/R above 1.5, beating SPY more t
 | Technology | Role |
 |-----------|------|
 | **FastAPI** | Python web framework |
-| **Mangum** | Adapter — translates API Gateway events into FastAPI requests |
-| **AWS Lambda** | Serverless compute |
-| **AWS API Gateway (HTTP API)** | Routes HTTP requests to Lambda |
+| **Mangum** | Adapter — translates Lambda Function URL events into FastAPI requests |
+| **AWS Lambda** | Serverless compute — two separate functions (public + private) |
+| **AWS Lambda Function URL** | Direct HTTPS endpoint per Lambda — no API Gateway timeout ceiling |
 | **uvicorn** | Local dev only — runs FastAPI on port 8000 |
 
-In production: browser → API Gateway → Lambda → FastAPI (via Mangum). In local dev, uvicorn replaces API Gateway + Lambda entirely.
+In production: browser → Lambda Function URL → Lambda → FastAPI (via Mangum). In local dev, uvicorn replaces the Lambda + Function URL entirely.
 
 ### Data & Storage
 
@@ -187,24 +187,27 @@ Frontend:    DailySummaryPanel.jsx
              useEffect → GET /api/ai/briefing on mount
 
 Backend:     routers/ai.py → get_briefing()
-               └─ cache_service.get_cached_briefing()
-                    └─ dynamo_service.get_cache("briefing")
-                    └─ Checks: cached_at date == today (ET timezone)
+               └─ Checks PORTFOLIO_MODE:
+                    synthetic → cache_service.get_cached_briefing()
+                                  └─ dynamo_service.get_cache("briefing")
+                    live      → cache_service.get_cached_live_briefing()
+                                  └─ dynamo_service.get_cache("briefing_live")
+               └─ Checks: cached_at date == today (ET timezone)
 
 Cache HIT:   Returns {briefing, date} from DynamoDB — no Claude API call
              Minutes remaining computed live (changes through the day, not cached)
 
-Cache MISS:  context_loader.load_context() — assembles full market snapshot
-               └─ claude_service.morning_briefing(ctx) — Anthropic API call
-               └─ dynamo_service.put_cache("briefing", {briefing, date})
-               └─ Returns result
+Cache MISS:  Returns {briefing: null} — no on-demand generation
+             UI shows market-closed / no-briefing message
+             The scheduled DailyRefreshFunction (synthetic) or
+             DailyRefreshLiveBriefingFunction (live) writes the cache at 9:35am ET
 
 Response:    Briefing text displayed as a formatted paragraph
              "X min left" badge shown when market is open
 Error path:  "Error: <server detail>" shown in the panel
 ```
 
-The briefing generates once per day. After the first page load caches it, every subsequent load reads from DynamoDB without touching the Claude API. In production the 7am scheduled job pre-generates it before anyone visits.
+The briefing is pre-generated at 9:35am ET by a scheduled Lambda — not generated on demand. This avoids the cold-start + Claude latency on the first page load of the day. Cache misses (before 9:35am, weekends) return null and the UI degrades gracefully.
 
 ---
 
@@ -484,12 +487,15 @@ Live trades are never auto-closed — they get flagged with the trigger reason a
 
 ---
 
-### 12. Daily Refresh (Scheduled — 7:00am ET)
+### 12. Daily Refresh (Scheduled — 9:35am ET)
+
+Two Lambdas run concurrently at 9:35am ET on weekdays.
 
 ```
-Trigger:     AWS EventBridge: cron(0 12 * * ? *)  — daily at 12:00 UTC = 7:00am ET
+Trigger:     AWS EventBridge: cron(35 13 ? * MON-FRI *)  — Mon–Fri at 13:35 UTC = 9:35am ET
 
-Lambda:      main.py → refresh_handler()
+Lambda 1:    main.py → refresh_handler()  [DailyRefreshFunction]
+               PORTFOLIO_MODE=synthetic — Schwab access only
                └─ cache_service.run_daily_refresh()
                     └─ context_loader._get_watchlist() → Schwab movers
                     └─ schwab_service.get_previous_day_movers(tickers, limit=50)
@@ -500,10 +506,17 @@ Lambda:      main.py → refresh_handler()
                     └─ claude_service.morning_briefing(ctx) — Anthropic API call
                          └─ dynamo_service.put_cache("briefing", {briefing, date})
 
+Lambda 2:    main.py → refresh_live_briefing_handler()  [DailyRefreshLiveBriefingFunction]
+               PORTFOLIO_MODE=live — Schwab + Robinhood access
+               └─ cache_service.run_live_briefing_refresh()
+                    └─ context_loader.load_context() with real Robinhood portfolio
+                    └─ claude_service.morning_briefing(ctx) — Anthropic API call
+                         └─ dynamo_service.put_cache("briefing_live", {briefing, date})
+
 Returns:     {refreshed_at, scanner_count, sentiment_count, briefing_cached, errors}
 ```
 
-Only automatic Claude API call of the day. After this runs all three caches are warm — first page load is instant.
+After 9:35am all caches are warm — both the public and private morning briefings are pre-generated and first page load is instant. Scanner and sentiment are shared between both URLs; each URL gets its own briefing cache key with portfolio context appropriate to its mode.
 
 ---
 
@@ -591,12 +604,16 @@ Cloudflare (ait.gsuarez.dev)
     │
     ├──▶ CloudFront ──▶ S3: trading-dashboard-public
     │         (static React files, VITE_PORTFOLIO_MODE=synthetic)
+    │         (no x-api-key — public requests need no auth)
     │
-    └──▶ API Gateway ──▶ Lambda (FastAPI + Mangum)
-                               │
-                    ┌──────────┼────────────┐
-                    ▼          ▼            ▼
-                DynamoDB    SSM/Secrets  Schwab/Finnhub/Claude
+    └──▶ Lambda Function URL ──▶ TradingDashboardFunction
+                                   PORTFOLIO_MODE=synthetic
+                                   IAM: Schwab only — no Robinhood access
+                                      │
+                           ┌──────────┼────────────┐
+                           ▼          ▼            ▼
+                       DynamoDB    SSM/Secrets  Schwab/Finnhub/Claude
+                                   (Schwab token only)
 ```
 
 ### Production — Private Version
@@ -606,30 +623,40 @@ Owner visits private dashboard URL
     │
     ▼
 Cloudflare Access
-  └─ Shows login page — enter your-email@example.com
+  └─ Shows login page
   └─ Emails 6-digit PIN → enter PIN → authenticated 24 hours
   └─ Anyone else: blocked entirely, never reaches S3 or Lambda
     │
     ▼
 CloudFront ──▶ S3: trading-dashboard-private
                     (same React source, VITE_PORTFOLIO_MODE=live build)
+                    (x-api-key baked into bundle at CI build time)
     │
     ▼
-API Gateway ──▶ Lambda (same function as public)
-                       │
-            DynamoDB / SSM / Secrets / Schwab / Finnhub / Claude
+Lambda Function URL ──▶ TradingDashboardPrivateFunction
+                           FastAPI middleware validates x-api-key header
+                           PORTFOLIO_MODE=live
+                           IAM: Schwab + Robinhood credentials
+                              │
+                   DynamoDB / SSM / Secrets / Schwab / Finnhub / Claude
+                                              (Schwab token + Robinhood creds)
 ```
 
 ### Scheduled Jobs
 
 ```
-EventBridge (daily 7:00am ET)
-    └──▶ DailyRefreshFunction → cache_service.run_daily_refresh()
-              Schwab movers    ──▶ DynamoDB cache["scanner"]
-              Finnhub sentiment ──▶ DynamoDB cache["sentiment"]
-              Claude briefing   ──▶ DynamoDB cache["briefing"]
+EventBridge (Mon–Fri 9:35am ET) — two functions run concurrently:
+    ├──▶ DailyRefreshFunction → cache_service.run_daily_refresh()
+    │         PORTFOLIO_MODE=synthetic, Schwab access only
+    │         Schwab movers     ──▶ DynamoDB cache["scanner"]
+    │         Finnhub sentiment ──▶ DynamoDB cache["sentiment"]
+    │         Claude briefing   ──▶ DynamoDB cache["briefing"]
+    │
+    └──▶ DailyRefreshLiveBriefingFunction → cache_service.run_live_briefing_refresh()
+              PORTFOLIO_MODE=live, Schwab + Robinhood access
+              Claude briefing (real portfolio context) ──▶ DynamoDB cache["briefing_live"]
 
-EventBridge (every 5 min, Mon–Fri 9:30am–4pm ET)
+EventBridge (every 1 min, Mon–Fri 9:00am–4:59pm ET)
     └──▶ PriceMonitorFunction → cache_service.run_price_monitor()
               DynamoDB open trades + Schwab live quotes
               Auto-close paper trades at target/stop
@@ -666,12 +693,13 @@ GitHub Actions: .github/workflows/deploy.yml
     │
     └── job: frontend-private  (runs after backend, parallel with public)
           npm ci
-          npm run build  [VITE_API_URL=PRIVATE_API_URL, VITE_PORTFOLIO_MODE=live]
+          npm run build  [VITE_API_URL=PRIVATE_API_URL, VITE_PORTFOLIO_MODE=live,
+                          VITE_API_KEY=PRIVATE_API_KEY]
           aws s3 sync frontend/dist → s3://trading-dashboard-private --delete
           CloudFront invalidation
 ```
 
-Required GitHub repository secrets: `AWS_DEPLOY_ROLE_ARN`, `PUBLIC_API_URL`, `PRIVATE_API_URL`, `PUBLIC_CF_DIST_ID`, `PRIVATE_CF_DIST_ID`.
+Required GitHub repository secrets: `AWS_DEPLOY_ROLE_ARN`, `PUBLIC_API_URL`, `PRIVATE_API_URL`, `PUBLIC_CF_DIST_ID`, `PRIVATE_CF_DIST_ID`, `PRIVATE_API_KEY`.
 
 ---
 
@@ -704,6 +732,8 @@ All 8 guardrails run through `guardrail_service.check_all()` in `backend/service
 | `SCHWAB_CLIENT_SECRET` | SSM SecureString `/trading-app/schwab-client-secret` | Same runtime SSM fetch | No |
 | Schwab OAuth token | Secrets Manager `/trading-app/schwab-token` | `schwab_service.py` reads + writes via boto3 at runtime | Yes — `schwab-py` auto-refreshes and writes back |
 | Robinhood credentials | Secrets Manager `/trading-app/robinhood-credentials` | `robinhood_service.py` reads via boto3 at runtime | No — update via CLI |
+| Robinhood session token | Secrets Manager `/trading-app/robinhood-session` | `robinhood_service.py` — restored on cold start, written back after each login | Yes — Lambda writes fresh token after each successful login |
+| Private API key | SSM String `/trading-app/private-api-key` (also GitHub Secret `PRIVATE_API_KEY`) | SAM bakes it into private Lambda env var at deploy time; CI bakes it into private frontend bundle | No — rotate manually (generate new UUID, update SSM + GitHub Secret, redeploy) |
 
 **`.env.local`** — Local dev only. Contains all credentials plus config. Gitignored. Copy from `.env.example` and fill in values. `start.sh` loads it automatically.
 
