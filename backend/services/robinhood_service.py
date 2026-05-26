@@ -73,7 +73,7 @@ def _login():
     global _authenticated
     if _authenticated:
         return
-    os.environ.setdefault("HOME", "/tmp")
+    os.environ["HOME"] = "/tmp"
     _restore_session()
     creds = _get_credentials()
 
