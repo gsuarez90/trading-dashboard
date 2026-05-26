@@ -110,6 +110,7 @@ Resources:
 
   RobinhoodCredentials:
     Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
     Properties:
       Name: /trading-app/robinhood-credentials
       Description: Robinhood username and password (private Lambda only)
@@ -121,6 +122,7 @@ Resources:
 
   SchwabTokenSecret:
     Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
     Properties:
       Name: /trading-app/schwab-token
       Description: Schwab OAuth token JSON (written by schwab_auth.py, rotated automatically)
@@ -129,6 +131,7 @@ Resources:
 
   RobinhoodSessionSecret:
     Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
     Properties:
       Name: /trading-app/robinhood-session
       Description: Robinhood session token (base64 pickle) — written by Lambda after login, avoids device-approval on cold start

@@ -663,6 +663,33 @@ aws secretsmanager describe-secret --secret-id /trading-app/robinhood-credential
 
 No `SecretString` is returned — the value stays encrypted. Use this when you want to verify the secret is there without decrypting it.
 
+## Setting Robinhood Credentials Secret from PowerShell (Correct JSON Format)
+
+Simple string concatenation breaks if the password contains special characters (`"`, `\`, etc.). Use `ConvertTo-Json` and write to a temp file — this handles escaping correctly and avoids PowerShell-to-AWS-CLI argument encoding issues:
+
+```powershell
+$user = Read-Host "Robinhood username"
+$pass = Read-Host "Robinhood password" -AsSecureString
+$passPlain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($pass))
+$secret = [ordered]@{ username = $user; password = $passPlain } | ConvertTo-Json -Compress
+$tmp = "$env:TEMP\rh_creds.json"
+[System.IO.File]::WriteAllText($tmp, $secret)
+aws secretsmanager put-secret-value --secret-id /trading-app/robinhood-credentials --secret-string "file://$tmp"
+Remove-Item $tmp
+```
+
+Verify (no values exposed):
+```powershell
+$raw = aws secretsmanager get-secret-value --secret-id /trading-app/robinhood-credentials --query SecretString --output text
+try { $obj = $raw | ConvertFrom-Json; Write-Host "Valid. Keys: $($obj.PSObject.Properties.Name -join ', ')" } catch { Write-Host "INVALID JSON" }
+```
+
+- `-AsSecureString` masks the password on screen; the value is not stored in PowerShell history
+- Temp file lives in user-only `%TEMP%` and is deleted immediately after use
+- `file://` syntax avoids PowerShell mangling the JSON when passing it as a CLI argument
+
+---
+
 ## Clearing the Terminal Window
 
 - **Command Prompt:** `cls`
@@ -680,3 +707,23 @@ MSYS_NO_PATHCONV=1 aws secretsmanager put-secret-value --secret-id /trading-app/
 ```
 
 The `//` workaround does NOT work for AWS — it sends the double slash literally to the API, which then can't find the secret. Always use `MSYS_NO_PATHCONV=1` instead.
+
+## Setting Environment Variables Safely in Bash
+
+`export VAR=value` sets a shell environment variable but writes the value to `~/.bash_history` in plain text. For sensitive values like PINs, use `read -s` instead — it reads input silently with no echo and no history entry:
+
+```bash
+read -s RH_MFA_CODE && export RH_MFA_CODE
+```
+
+Type the value and hit enter. Nothing appears on screen.
+
+To clear the variable when done:
+```bash
+unset RH_MFA_CODE
+```
+
+Verify it's gone:
+```bash
+echo $RH_MFA_CODE   # should print nothing
+```
