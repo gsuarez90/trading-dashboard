@@ -270,8 +270,11 @@ SecretsPolicy:
             - secretsmanager:PutSecretValue
           Resource:
             - !Ref SchwabTokenSecret
-            - !Ref RobinhoodCredentials
+            - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/trading-app/robinhood-credentials*'
+            - !Ref RobinhoodSessionSecret
 ```
+
+> **Why the ARN pattern instead of `!Ref`:** `RobinhoodCredentials` was removed from CloudFormation management so that `sam deploy` can never reset the secret value to the placeholder again (`DeletionPolicy: Retain` registered, then resource removed). The secret still exists in AWS — it's just no longer CF-owned. IAM policies reference it by hardcoded ARN with a trailing `*` to match the 6-character random suffix Secrets Manager appends to all secret ARNs.
 
 **Replace with:**
 ```yaml
@@ -298,8 +301,16 @@ RobinhoodSecretsPolicy:
           Action:
             - secretsmanager:GetSecretValue
           Resource:
-            - !Ref RobinhoodCredentials
+            - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/trading-app/robinhood-credentials*'
+        - Effect: Allow
+          Action:
+            - secretsmanager:GetSecretValue
+            - secretsmanager:PutSecretValue
+          Resource:
+            - !Ref RobinhoodSessionSecret
 ```
+
+> **Gap vs. original plan:** The original plan only covered `RobinhoodCredentials`. `robinhood_service._restore_session()` needs `GetSecretValue` on `RobinhoodSessionSecret` and `_save_session()` needs `PutSecretValue` on it. Without this, session token persistence fails with `AccessDeniedException` and every private Lambda cold start requires a full re-login.
 
 ### 2b. Update `TradingHttpApi`
 
@@ -424,6 +435,8 @@ Add a FastAPI middleware that validates the `x-api-key` header on the private La
 
 Add this block after the `app.add_middleware(CORSMiddleware, ...)` call and before `dynamo_service.ensure_table_exists()`:
 
+> **Before adding:** check that `import os`, `from fastapi import Request`, and `from fastapi.responses import JSONResponse` are not already present at the top of `main.py`. They likely are — only add what is missing.
+
 ```python
 import os
 from fastapi import Request
@@ -470,6 +483,8 @@ export const API = BASE
 In every component below, make two changes:
 1. Replace `const API = import.meta.env.VITE_API_URL || '/api'` with the import line
 2. Replace every `fetch(\`${API}/...`)` with `apiFetch('/...')`
+
+> **Line numbers are approximate** — they were written before several edits this session. Read each file to find the actual locations rather than jumping directly to the listed line numbers.
 
 **`ChatPanel.jsx`**
 ```javascript
@@ -575,6 +590,39 @@ Go to: **GitHub repo → Settings → Secrets and variables → Actions**
 | `PRIVATE_API_URL` | Private API Gateway URL from SAM deploy output (`PrivateApiUrl`) |
 
 `PUBLIC_API_URL` does **not** change — the public API Gateway (`TradingHttpApi`) keeps the same URL.
+
+---
+
+## Pre-Step 7 — Seed Robinhood Session Token into Secrets Manager
+
+The `/trading-app/robinhood-session` secret must contain a valid session token before the first private Lambda cold start. Without it, `_restore_session()` finds nothing and `_login()` attempts a fresh Robinhood login — which requires interactive MFA that Lambda cannot provide.
+
+**Check first:** If you completed an MFA login via the private URL today, `_save_session()` already wrote a fresh token to this secret. Verify:
+
+```powershell
+aws secretsmanager get-secret-value --secret-id /trading-app/robinhood-session `
+  --query SecretString --output text | python -c "import sys,json; d=json.load(sys.stdin); print('token present:', bool(d.get('token')))"
+```
+
+If `token present: True`, skip this step — the secret is already seeded.
+
+**If the secret is empty or missing**, seed from your local pickle file. Use `ConvertTo-Json` via a temp file to avoid JSON encoding issues with base64 padding characters:
+
+```powershell
+$tokenBytes = [System.IO.File]::ReadAllBytes("$env:USERPROFILE\.tokens\robinhood.pickle")
+$tokenB64 = [Convert]::ToBase64String($tokenBytes)
+$secret = @{ token = $tokenB64 } | ConvertTo-Json -Compress
+$tmp = "$env:TEMP\rh_session.json"
+[System.IO.File]::WriteAllText($tmp, $secret)
+aws secretsmanager put-secret-value `
+  --secret-id /trading-app/robinhood-session `
+  --secret-string "file://$tmp"
+Remove-Item $tmp
+```
+
+After this, the private Lambda's first cold start will restore the session and skip the MFA flow. The Lambda overwrites the secret with a fresh token after each successful login via `_save_session()`.
+
+> **Token expiry:** The `device_token` inside the pickle is permanent. The `access_token` expires in 24h but `robin_stocks` handles refresh automatically using the stored refresh token. You only need to re-seed manually if the device is deregistered or the token file is lost.
 
 ---
 
