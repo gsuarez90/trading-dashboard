@@ -237,8 +237,16 @@ def get_market_status() -> dict:
         if eq.get("isOpen", False):
             next_open = check.strftime("%Y-%m-%d")
             break
+    # Schwab's isOpen means "is today a trading day", not "is the market open right now".
+    # Cross-check with current ET time so after-hours returns is_open=False.
+    now_et = datetime.now(tz=ET)
+    within_hours = (
+        now_et.weekday() < 5
+        and (now_et.hour > 9 or (now_et.hour == 9 and now_et.minute >= 30))
+        and now_et.hour < 16
+    )
     return {
-        "is_open":        today["is_open"],
+        "is_open":        today["is_open"] and within_hours,
         "date":           today["date"],
         "next_open_date": next_open,
     }
