@@ -23,7 +23,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).resolve().parent.parent / "backend" / ".env.local")
+load_dotenv(Path(__file__).resolve().parent.parent / ".env.local")
+
+# Warn immediately if DynamoDB is not configured — all cache checks will error
+# and fall back to live Schwab/Finnhub calls, making the test useless for cache validation.
+if not os.environ.get("DYNAMO_TABLE_NAME"):
+    print("⚠  WARNING: DYNAMO_TABLE_NAME not set in backend/.env.local")
+    print("   Add: DYNAMO_TABLE_NAME=trading-dashboard")
+    print("   Without it, all DynamoDB cache checks error → live API fallback → misleading timings.\n")
 
 from datetime import datetime
 from zoneinfo import ZoneInfo
