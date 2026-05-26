@@ -14,7 +14,7 @@ Implements Option 1 from `portfolio-mode-separation.md`: separate public (synthe
 
 ## Implementation Status
 
-Backend code changes are complete and committed. AWS infrastructure (Steps 1–8) is pending.
+All infrastructure deployed. Step 8 (verification) is the only remaining item.
 
 | Item | Status |
 |------|--------|
@@ -22,14 +22,14 @@ Backend code changes are complete and committed. AWS infrastructure (Steps 1–8
 | `ai.py` — `get_briefing()` branches on `PORTFOLIO_MODE`, returns cache-or-null on both paths | ✅ Done |
 | `main.py` — `refresh_live_briefing_handler`, `x-api-key` added to CORS `allow_headers` | ✅ Done |
 | Pre-Task — Investigate portfolio null values on first load | ✅ Done — root cause: `_write(token)` missing `**kwargs` caused TypeError on Schwab token refresh, silently aborting `_enrich_positions()`. Fixed in commit `be30e97`. |
-| Step 1 — Generate UUID API key, store in SSM | ⬜ Pending |
-| Step 2 — `template.yaml` IAM split + private function + DailyRefreshLiveBriefingFunction | ⬜ Pending |
-| Step 3 — `main.py` API key middleware | ⬜ Pending |
+| Step 1 — Generate UUID API key, store in SSM | ✅ Done — stored as `String` (not SecureString; see gotcha note) |
+| Step 2 — `template.yaml` IAM split + private function + DailyRefreshLiveBriefingFunction | ✅ Done |
+| Step 3 — `main.py` API key middleware | ✅ Done |
 | Step 4a — `frontend/src/utils/api.js` — `apiFetch` utility with trailing-slash strip | ✅ Done |
-| Step 4b — Update 8 components to use `apiFetch` | ⬜ Pending — all 8 components still use `const API = import.meta.env.VITE_API_URL` |
-| Step 5 — `deploy.yml` `VITE_API_KEY` line | ⬜ Pending |
-| Step 6 — GitHub Secrets | ⬜ Pending |
-| Step 7 — `sam deploy` + capture private API URL | ⬜ Pending |
+| Step 4b — Update 8 components to use `apiFetch` | ✅ Done |
+| Step 5 — `deploy.yml` `VITE_API_KEY` line | ✅ Done |
+| Step 6 — GitHub Secrets (`PRIVATE_API_KEY`, `PRIVATE_API_URL`) | ✅ Done |
+| Step 7 — `sam deploy` + capture private API URL + update `PRIVATE_API_URL` secret | ✅ Done |
 | Step 8 — Verification | ⬜ Pending |
 
 ---
@@ -236,15 +236,13 @@ This key is a shared secret between the private Lambda and the private frontend 
 
 Copy the output (e.g., `a3f8c1d2-4e5b-6789-abcd-ef0123456789`). You will use this value in Steps 2, 6, and 7. Treat it like a password — do not commit it anywhere.
 
-Store it in SSM as a SecureString:
+Store it in SSM as a plain `String` — **not** `SecureString`:
 
 ```powershell
-aws ssm put-parameter `
-  --name "/trading-app/private-api-key" `
-  --value "YOUR-UUID-HERE" `
-  --type "SecureString" `
-  --description "Shared secret for private API Gateway authentication"
+aws ssm put-parameter --name "/trading-app/private-api-key" --value "YOUR-UUID-HERE" --type "String" --overwrite
 ```
+
+> **Gotcha:** `{{resolve:ssm-secure:...}}` dynamic references are NOT supported for Lambda environment variables in CloudFormation/SAM — only for a limited set of resource types (RDS, ElastiCache, etc.). Using `SecureString` here causes the changeset to fail with `Non-secure ssm prefix was used for secure parameter`. Store as `String` and use `{{resolve:ssm:...}}` in the template. The value ends up in the Lambda env var either way, so there is no meaningful security difference for a UUID API key.
 
 ---
 
