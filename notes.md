@@ -728,6 +728,35 @@ Verify it's gone:
 echo $RH_MFA_CODE   # should print nothing
 ```
 
+## SSM SecureString in Lambda Env Vars — Do Not Use `ssm-secure` Resolve
+
+`{{resolve:ssm-secure:...}}` is NOT supported for Lambda environment variables in CloudFormation/SAM. It only works for a limited set of resource types (RDS, ElastiCache, DocumentDB). Attempting to use it for Lambda env vars fails the changeset with:
+
+```
+Non-secure ssm prefix was used for secure parameter /trading-app/some-key
+```
+
+This error fires whether you use `ssm:` (wrong for SecureString) or `ssm-secure:` (unsupported for Lambda). The actual fix is:
+
+**Store params that need to appear in Lambda env vars as `String` type, not `SecureString`.**
+
+```powershell
+# Store as String so CloudFormation can inject it via {{resolve:ssm:...}}
+aws ssm put-parameter --name "/trading-app/private-api-key" --value "your-value" --type "String" --overwrite
+```
+
+```yaml
+# Then reference with plain ssm: prefix — works fine for String params
+PRIVATE_API_KEY: !Sub '{{resolve:ssm:/trading-app/private-api-key}}'
+```
+
+**Why this is still safe for an API key:** The value ends up in Lambda environment variables regardless of SSM type — it's visible in the AWS Lambda console to anyone with IAM access either way. `SecureString` would only add protection if you kept the value out of Lambda env vars and fetched it at runtime via boto3. For this project's single-user API key, plain `String` + Lambda env var injection is the right approach.
+
+**Rule for this project:**
+- Plain config values (`PORTFOLIO_MODE`, `TRADING_MODE`, etc.) → `String` in SSM, `{{resolve:ssm:...}}` in template ✅
+- API keys fetched at Lambda runtime via `ssm_service.py` (`ANTHROPIC_API_KEY`, `FINNHUB_API_KEY`, etc.) → `SecureString` in SSM, NOT in template at all ✅
+- `PRIVATE_API_KEY` (injected as env var) → `String` in SSM, `{{resolve:ssm:...}}` in template ✅
+
 ---
 
 ## API Gateway vs Lambda Function URL — Why the Switch Was Made
