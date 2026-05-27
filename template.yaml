@@ -18,6 +18,7 @@ Globals:
         DAILY_GOAL:           !Sub '{{resolve:ssm:/trading-app/daily-goal}}'
         DAILY_LOSS_LIMIT:     !Sub '{{resolve:ssm:/trading-app/daily-loss-limit}}'
         DAILY_TRADE_LIMIT:    !Sub '{{resolve:ssm:/trading-app/daily-trade-limit}}'
+        PDT_EXEMPT:           !Sub '{{resolve:ssm:/trading-app/PDT_EXEMPT}}'
         MAX_POSITION_SIZE_PCT: !Sub '{{resolve:ssm:/trading-app/max-position-size-pct}}'
         # API keys fetched from SSM SecureString at Lambda cold start (see ssm_service.py)
         # Infrastructure
