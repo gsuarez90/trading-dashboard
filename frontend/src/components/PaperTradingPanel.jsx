@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Badge, Button, Group, Paper, Progress, SimpleGrid, Text, TextInput } from '@mantine/core'
 import { apiFetch } from '../utils/api'
 
@@ -268,12 +268,10 @@ export default function PaperTradingPanel() {
       .catch(e => { setError(String(e)); setLoading(false) })
   }, [])
 
-  const [loaded, setLoaded] = useState(false)
+  useEffect(() => { load() }, [load])
+
   function toggleExpand() {
-    setExpanded(e => {
-      if (!e && !loaded) { load(); setLoaded(true) }
-      return !e
-    })
+    setExpanded(e => !e)
   }
 
   const TABS = ['open', 'pending', 'history', 'summary']
