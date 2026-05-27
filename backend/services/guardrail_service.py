@@ -86,6 +86,9 @@ def _check_reward_risk(trade: TradeSetup, ctx: GuardrailContext) -> tuple[bool, 
 
 
 def _check_daily_trade_limit(trade, ctx: GuardrailContext) -> tuple[bool, str]:
+    # PDT rule does not apply when account equity exceeds $25k — set PDT_EXEMPT=true in SSM
+    if os.environ.get("PDT_EXEMPT", "false").lower() == "true":
+        return False, ""
     limit = int(os.environ.get("DAILY_TRADE_LIMIT", 3))
     if ctx.trade_count_today >= limit:
         return True, f"Daily trade limit reached ({ctx.trade_count_today}/{limit})"
@@ -153,6 +156,7 @@ def get_status(ctx: GuardrailContext) -> dict:
     """Returns current guardrail status without a specific trade — used by the dashboard."""
     limit = float(os.environ.get("DAILY_LOSS_LIMIT", 200))
     trade_limit = int(os.environ.get("DAILY_TRADE_LIMIT", 3))
+    pdt_exempt = os.environ.get("PDT_EXEMPT", "false").lower() == "true"
     now_et = ctx.current_et()
     t = now_et.time()
     in_market_hours = now_et.weekday() < 5 and _MARKET_OPEN <= t < _MARKET_CLOSE
@@ -167,7 +171,8 @@ def get_status(ctx: GuardrailContext) -> dict:
         "daily_trade_limit": {
             "limit": trade_limit,
             "trades_today": ctx.trade_count_today,
-            "triggered": ctx.trade_count_today >= trade_limit,
+            "triggered": False if pdt_exempt else ctx.trade_count_today >= trade_limit,
+            "pdt_exempt": pdt_exempt,
         },
         "market_hours": {
             "in_session": in_market_hours,

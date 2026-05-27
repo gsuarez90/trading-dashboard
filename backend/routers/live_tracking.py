@@ -53,12 +53,32 @@ def list_trades(date: str = Query(default=None)):
         raise HTTPException(status_code=502, detail=f"List trades failed: {e}")
 
 
+@router.get("/pending")
+def list_pending(date: str = Query(default=None)):
+    try:
+        today = date or datetime.now(tz=ET).strftime("%Y-%m-%d")
+        pending = dynamo_service.get_pending_trades_for_date(today)
+        return [t for t in pending if t.get("mode") == "live"]
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"List pending failed: {e}")
+
+
 @router.get("/{trade_id}")
 def get_trade(trade_id: str):
     trade = dynamo_service.get_trade(trade_id)
     if trade is None:
         raise HTTPException(status_code=404, detail=f"Trade {trade_id} not found")
     return trade
+
+
+@router.post("/{trade_id}/cancel")
+def cancel_trade(trade_id: str):
+    try:
+        return live_tracking_service.cancel_pending_order(trade_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Cancel trade failed: {e}")
 
 
 @router.post("/{trade_id}/exit")

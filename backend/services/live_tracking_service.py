@@ -81,6 +81,17 @@ def log_trade(
     return trade
 
 
+def cancel_pending_order(trade_id: str) -> dict:
+    """Cancel a pending live order before it fills. Sets status to 'cancelled' (preserved in history)."""
+    trade = dynamo_service.get_trade(trade_id)
+    if trade is None:
+        raise ValueError(f"Trade {trade_id} not found")
+    if trade.get("status") != "pending":
+        raise ValueError(f"Trade {trade_id} is not pending (status: {trade.get('status')})")
+    dynamo_service.update_trade(trade_id, {"status": "cancelled"})
+    return {**trade, "status": "cancelled"}
+
+
 def log_exit(trade_id: str, exit_price: float, close_reason: str = "manual") -> dict:
     """Record that the user manually closed a live trade in Robinhood."""
     trade = dynamo_service.get_trade(trade_id)

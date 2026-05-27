@@ -73,6 +73,16 @@ def get_trade(trade_id: str):
     return trade
 
 
+@router.post("/{trade_id}/cancel")
+def cancel_trade(trade_id: str):
+    try:
+        return paper_trading_service.cancel_pending_order(trade_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Cancel trade failed: {e}")
+
+
 @router.post("/{trade_id}/close")
 def close_trade(trade_id: str, request: CloseTradeRequest):
     try:

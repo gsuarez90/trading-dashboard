@@ -145,7 +145,7 @@ def get_pending_trades_for_date(date: str) -> list[dict]:
 def get_trades_by_date(date: str) -> list[dict]:
     """All trade records for a given date. Excludes guardrail events and cache entries."""
     items = []
-    for status in ("open", "closed", "pending", "expired"):
+    for status in ("open", "closed", "pending", "expired", "cancelled"):
         resp = _table().query(
             IndexName="status-date-index",
             KeyConditionExpression=Key("status").eq(status) & Key("date").eq(date),

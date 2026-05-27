@@ -13,6 +13,7 @@ const REASON_LABEL = {
   manual:      'Manual',
   eod_close:   'EOD close',
   kill_switch: 'Kill switch',
+  cancelled:   'Cancelled',
 }
 
 function fmt(n, prefix = '$') {
@@ -75,6 +76,45 @@ function SummaryBar({ summary }) {
         size="xs"
         radius="xs"
       />
+    </Paper>
+  )
+}
+
+function PendingRow({ trade, onCancel }) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr]   = useState(null)
+  const dirColor = DIR_STYLE[trade.direction]?.color ?? 'green'
+
+  function cancel() {
+    setBusy(true)
+    setErr(null)
+    apiFetch(`/live-trades/${trade.trade_id}/cancel`, { method: 'POST' })
+      .then(r => r.ok ? r.json() : r.json().then(e => Promise.reject(e.detail ?? r.statusText)))
+      .then(() => { setBusy(false); onCancel() })
+      .catch(e => { setErr(String(e)); setBusy(false) })
+  }
+
+  return (
+    <Paper p="xs" mb="xs" radius="xs" style={{ opacity: 0.85 }}>
+      <Group gap="xs" wrap="wrap">
+        <Text fw={700} size="sm" ff="mono" style={{ minWidth: 52 }}>{trade.ticker}</Text>
+        <Badge color={dirColor} size="xs" radius="xl" variant="light">{trade.direction.toUpperCase()}</Badge>
+        <Text size="xs" c="dimmed">{trade.shares} sh</Text>
+        <Text size="xs" c="dimmed">
+          Limit <Text span ff="mono">${(trade.limit_price ?? trade.entry_price).toFixed(2)}</Text>
+        </Text>
+        <Text size="xs" c="dimmed">
+          T <Text span ff="mono" c="green">${trade.target_price.toFixed(2)}</Text>
+          {' / '}
+          S <Text span ff="mono" c="red">${trade.stop_loss.toFixed(2)}</Text>
+        </Text>
+        <Badge color="yellow" size="xs" radius="xl" variant="light">PENDING</Badge>
+        <Text size="xs" c="dimmed">{fmtTime(trade.pending_since)}</Text>
+        <Button size="xs" variant="subtle" color="red" disabled={busy} onClick={cancel}>
+          {busy ? 'Cancelling…' : 'Cancel'}
+        </Button>
+      </Group>
+      {err && <Text size="xs" c="red" mt={4}>{err}</Text>}
     </Paper>
   )
 }
@@ -176,8 +216,13 @@ function OpenTab({ trades, onClose }) {
   return open.map(t => <OpenRow key={t.trade_id} trade={t} onClose={onClose} />)
 }
 
+function PendingTab({ pending, onCancel }) {
+  if (pending.length === 0) return <Text c="dimmed" size="sm" py="xs">No pending live orders today.</Text>
+  return pending.map(t => <PendingRow key={t.trade_id} trade={t} onCancel={onCancel} />)
+}
+
 function HistoryTab({ trades }) {
-  const closed = trades.filter(t => t.status !== 'open')
+  const closed = trades.filter(t => t.status !== 'open' && t.status !== 'pending')
   if (closed.length === 0) return <Text c="dimmed" size="sm" py="xs">No closed live trades today.</Text>
   return <div>{closed.map(t => <HistoryRow key={t.trade_id} trade={t} />)}</div>
 }
@@ -213,6 +258,7 @@ export default function LiveTrackingPanel() {
   const [tab, setTab]           = useState('open')
   const [expanded, setExpanded] = useState(true)
   const [trades, setTrades]     = useState([])
+  const [pending, setPending]   = useState([])
   const [summary, setSummary]   = useState(null)
   const [loading, setLoading]   = useState(false)
   const [error, setError]       = useState(null)
@@ -222,9 +268,10 @@ export default function LiveTrackingPanel() {
     setError(null)
     Promise.all([
       apiFetch('/live-trades/', { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
+      apiFetch('/live-trades/pending', { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
       apiFetch('/live-trades/summary', { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r.statusText)),
     ])
-      .then(([t, s]) => { setTrades(t); setSummary(s); setLoading(false) })
+      .then(([t, p, s]) => { setTrades(t); setPending(p); setSummary(s); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })
   }, [])
 
@@ -236,8 +283,9 @@ export default function LiveTrackingPanel() {
     })
   }
 
-  const TABS = ['open', 'history', 'summary']
-  const openCount = trades.filter(t => t.status === 'open').length
+  const TABS = ['open', 'pending', 'history', 'summary']
+  const openCount    = trades.filter(t => t.status === 'open').length
+  const pendingCount = pending.length
 
   return (
     <Paper p="md">
@@ -253,18 +301,20 @@ export default function LiveTrackingPanel() {
         {expanded && (
           <Group gap="xs" wrap="wrap">
             <Group gap={4}>
-              {TABS.map(t => (
-                <Button
-                  key={t}
-                  size="xs"
-                  variant={tab === t ? 'light' : 'subtle'}
-                  onClick={() => setTab(t)}
-                >
-                  {t === 'open'
-                    ? `Open${openCount ? ` (${openCount})` : ''}`
-                    : t.charAt(0).toUpperCase() + t.slice(1)}
-                </Button>
-              ))}
+              {TABS.map(t => {
+                const count = t === 'open' ? openCount : t === 'pending' ? pendingCount : 0
+                const label = t.charAt(0).toUpperCase() + t.slice(1)
+                return (
+                  <Button
+                    key={t}
+                    size="xs"
+                    variant={tab === t ? 'light' : 'subtle'}
+                    onClick={() => setTab(t)}
+                  >
+                    {count > 0 ? `${label} (${count})` : label}
+                  </Button>
+                )
+              })}
             </Group>
             <Button variant="subtle" size="xs" onClick={load} disabled={loading}>
               {loading ? 'Loading…' : 'Refresh'}
@@ -281,6 +331,7 @@ export default function LiveTrackingPanel() {
               <ModeNotice summary={summary} />
               <SummaryBar summary={summary} />
               {tab === 'open'    && <OpenTab    trades={trades} onClose={load} />}
+              {tab === 'pending' && <PendingTab pending={pending} onCancel={load} />}
               {tab === 'history' && <HistoryTab trades={trades} />}
               {tab === 'summary' && <SummaryTab summary={summary} />}
             </>

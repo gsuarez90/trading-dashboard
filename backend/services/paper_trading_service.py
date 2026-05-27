@@ -116,6 +116,17 @@ def expire_unfilled_orders(today: str) -> int:
     return count
 
 
+def cancel_pending_order(trade_id: str) -> dict:
+    """Cancel a pending order before it fills. Sets status to 'cancelled' (preserved in history)."""
+    trade = dynamo_service.get_trade(trade_id)
+    if trade is None:
+        raise ValueError(f"Trade {trade_id} not found")
+    if trade.get("status") != "pending":
+        raise ValueError(f"Trade {trade_id} is not pending (status: {trade.get('status')})")
+    dynamo_service.update_trade(trade_id, {"status": "cancelled"})
+    return {**trade, "status": "cancelled"}
+
+
 def close_trade(trade_id: str, exit_price: float, close_reason: str = "manual") -> dict:
     """Close an open trade and calculate realized P&L."""
     trade = dynamo_service.get_trade(trade_id)

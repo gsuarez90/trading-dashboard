@@ -14,6 +14,7 @@ const REASON_LABEL = {
   eod_close:   'EOD close',
   kill_switch: 'Kill switch',
   expired:     'Expired (unfilled)',
+  cancelled:   'Cancelled',
 }
 
 function fmt(n, prefix = '$') {
@@ -133,8 +134,19 @@ function OpenRow({ trade, onClose }) {
   )
 }
 
-function PendingRow({ trade }) {
+function PendingRow({ trade, onCancel }) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr]   = useState(null)
   const dirColor = DIR_STYLE[trade.direction]?.color ?? 'green'
+
+  function cancel() {
+    setBusy(true)
+    setErr(null)
+    apiFetch(`/paper-trades/${trade.trade_id}/cancel`, { method: 'POST' })
+      .then(r => r.ok ? r.json() : r.json().then(e => Promise.reject(e.detail ?? r.statusText)))
+      .then(() => { setBusy(false); onCancel() })
+      .catch(e => { setErr(String(e)); setBusy(false) })
+  }
 
   return (
     <Paper p="xs" mb="xs" radius="xs" style={{ opacity: 0.85 }}>
@@ -152,7 +164,11 @@ function PendingRow({ trade }) {
         </Text>
         <Badge color="yellow" size="xs" radius="xl" variant="light" ml="auto">PENDING</Badge>
         <Text size="xs" c="dimmed">{fmtTime(trade.pending_since)}</Text>
+        <Button size="xs" variant="subtle" color="red" disabled={busy} onClick={cancel}>
+          {busy ? 'Cancelling…' : 'Cancel'}
+        </Button>
       </Group>
+      {err && <Text size="xs" c="red" mt={4}>{err}</Text>}
     </Paper>
   )
 }
@@ -187,9 +203,9 @@ function OpenTab({ trades, onClose }) {
   return open.map(t => <OpenRow key={t.trade_id} trade={t} onClose={onClose} />)
 }
 
-function PendingTab({ pending }) {
+function PendingTab({ pending, onCancel }) {
   if (pending.length === 0) return <Text c="dimmed" size="sm" py="xs">No pending orders today.</Text>
-  return pending.map(t => <PendingRow key={t.trade_id} trade={t} />)
+  return pending.map(t => <PendingRow key={t.trade_id} trade={t} onCancel={onCancel} />)
 }
 
 function HistoryTab({ trades }) {
@@ -301,7 +317,7 @@ export default function PaperTradingPanel() {
             <>
               <SummaryBar summary={summary} />
               {tab === 'open'    && <OpenTab    trades={trades} onClose={load} />}
-              {tab === 'pending' && <PendingTab pending={pending} />}
+              {tab === 'pending' && <PendingTab pending={pending} onCancel={load} />}
               {tab === 'history' && <HistoryTab trades={trades} />}
               {tab === 'summary' && <SummaryTab summary={summary} />}
             </>
