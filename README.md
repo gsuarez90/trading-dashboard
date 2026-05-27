@@ -224,7 +224,11 @@ Backend:     routers/scanner.py → get_movers()
                └─ cache_service.get_cached_scanner(limit=20)
                     └─ dynamo_service.get_cache("scanner") → checks freshness
 
-Cache HIT:   Returns cached mover list immediately
+Cache HIT:   DynamoDB holds only the ticker watchlist (symbols, no prices)
+             schwab_service.get_previous_day_movers(cached_tickers) — live Schwab call
+               └─ Fetches current price, % change, volume for each cached ticker
+             Prices are always live — the cache controls *which tickers* to track,
+             not the price data itself. Every poll during the session gets fresh quotes.
 
 Cache MISS:  context_loader._get_watchlist()
                1. Schwab movers: get_dynamic_watchlist() — top movers across SPX, Nasdaq, Dow
