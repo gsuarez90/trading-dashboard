@@ -172,7 +172,7 @@ def morning_briefing(ctx: DailyContext) -> str:
     )
     response = _get_client().messages.create(
         model=_MODEL,
-        max_tokens=1024,
+        max_tokens=2048,
         system=system,
         messages=[{"role": "user", "content": json.dumps(ctx.to_dict(), default=str)}],
     )
