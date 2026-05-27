@@ -1,60 +1,49 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <defs>
-    <radialGradient id="face" cx="38%" cy="28%" r="72%">
-      <stop offset="0%" stop-color="#f0f0f0"/>
-      <stop offset="100%" stop-color="#a8a8a8"/>
-    </radialGradient>
-    <radialGradient id="cheek" cx="40%" cy="40%" r="60%">
-      <stop offset="0%" stop-color="#ff4422"/>
-      <stop offset="100%" stop-color="#880000"/>
-    </radialGradient>
-    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="1.2" result="blur"/>
-      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
-  </defs>
 
-  <!-- Background -->
-  <rect width="64" height="64" rx="12" fill="#0d1117"/>
+  <!-- Ears (behind head) -->
+  <polygon points="8,24 15,5 27,23" fill="#E8720A"/>
+  <polygon points="37,23 49,5 56,24" fill="#E8720A"/>
+  <polygon points="10,23 15,9 25,22" fill="#F5A878"/>
+  <polygon points="39,22 49,9 54,23" fill="#F5A878"/>
 
-  <!-- Face oval (metallic silver) -->
-  <ellipse cx="32" cy="31" rx="20" ry="24" fill="url(#face)"/>
+  <!-- Head -->
+  <circle cx="32" cy="40" r="24" fill="#E8720A"/>
 
-  <!-- Panel seam lines (robot aesthetic) -->
-  <line x1="32" y1="8" x2="32" y2="54" stroke="#aaa" stroke-width="0.7" opacity="0.45"/>
-  <line x1="13" y1="34" x2="51" y2="34" stroke="#aaa" stroke-width="0.7" opacity="0.35"/>
+  <!-- Muzzle (lighter) -->
+  <ellipse cx="32" cy="49" rx="13" ry="9" fill="#F5A050"/>
 
-  <!-- Brow plates (angular, mechanical) -->
-  <rect x="14" y="18.5" width="13" height="3.5" rx="1" fill="#505050" stroke="#404040" stroke-width="0.5"/>
-  <rect x="37" y="18.5" width="13" height="3.5" rx="1" fill="#505050" stroke="#404040" stroke-width="0.5"/>
+  <!-- Forehead stripes -->
+  <path d="M24,21 L22,31" stroke="#C05808" stroke-width="2" stroke-linecap="round"/>
+  <path d="M29,19 L28,29" stroke="#C05808" stroke-width="2" stroke-linecap="round"/>
+  <path d="M35,19 L36,29" stroke="#C05808" stroke-width="2" stroke-linecap="round"/>
+  <path d="M40,21 L42,31" stroke="#C05808" stroke-width="2" stroke-linecap="round"/>
 
-  <!-- Eye recesses -->
-  <rect x="14" y="22.5" width="13" height="9" rx="2" fill="#141414" stroke="#666" stroke-width="0.6"/>
-  <rect x="37" y="22.5" width="13" height="9" rx="2" fill="#141414" stroke="#666" stroke-width="0.6"/>
+  <!-- Left eye (open, heavy-lidded Garfield style) -->
+  <ellipse cx="22" cy="36" rx="6" ry="5.5" fill="white"/>
+  <ellipse cx="22" cy="37" rx="3.5" ry="4" fill="#4A9A20"/>
+  <ellipse cx="22" cy="37" rx="2" ry="2.8" fill="#111"/>
+  <circle cx="23.5" cy="34.5" r="1.2" fill="white"/>
+  <!-- Droopy upper eyelid -->
+  <path d="M16,33.5 Q22,29 28,33.5" fill="#E8720A"/>
 
-  <!-- Red LED eyes -->
-  <rect x="16" y="25" width="9" height="4" rx="1" fill="#ff2222" filter="url(#glow)"/>
-  <rect x="39" y="25" width="9" height="4" rx="1" fill="#ff2222" filter="url(#glow)"/>
+  <!-- Pirate patch strap (goes around forehead) -->
+  <path d="M35,31 Q33,25 30,20" stroke="#111" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+  <path d="M50,32 Q55,27 57,22" stroke="#111" stroke-width="2.2" fill="none" stroke-linecap="round"/>
 
-  <!-- Rosy cheeks -->
-  <circle cx="15" cy="38.5" r="4.5" fill="url(#cheek)" opacity="0.82"/>
-  <circle cx="49" cy="38.5" r="4.5" fill="url(#cheek)" opacity="0.82"/>
+  <!-- Pirate patch -->
+  <ellipse cx="42" cy="36" rx="9" ry="7" fill="#111"/>
+  <ellipse cx="40" cy="33.5" rx="4" ry="2.5" fill="#2A2A2A"/>
 
-  <!-- Mustache (thin, curled up at ends to meet cheeks) -->
-  <path d="M20 43 Q24 40.5 28.5 42.5 Q32 43.5 35.5 42.5 Q40 40.5 44 43"
-        stroke="#282828" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M20 43 Q13 42.5 15 38.5" stroke="#282828" stroke-width="2" fill="none" stroke-linecap="round"/>
-  <path d="M44 43 Q51 42.5 49 38.5" stroke="#282828" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <!-- Nose -->
+  <ellipse cx="32" cy="47" rx="3" ry="2" fill="#CC3333"/>
 
-  <!-- Smile -->
-  <path d="M24 48 Q32 52 40 48" stroke="#777" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+  <!-- Mouth -->
+  <path d="M27,51 Q32,55.5 37,51" fill="none" stroke="#993333" stroke-width="1.5" stroke-linecap="round"/>
 
-  <!-- Chin beard (pointed, dark like mustache) -->
-  <path d="M26 54.5 Q29 56.5 32 62 Q35 56.5 38 54.5 Z" fill="#282828" stroke="#1a1a1a" stroke-width="0.7"/>
+  <!-- Whiskers -->
+  <line x1="2" y1="45" x2="21" y2="47" stroke="#CCC" stroke-width="0.9" stroke-linecap="round"/>
+  <line x1="2" y1="49" x2="21" y2="50" stroke="#CCC" stroke-width="0.9" stroke-linecap="round"/>
+  <line x1="43" y1="47" x2="62" y2="45" stroke="#CCC" stroke-width="0.9" stroke-linecap="round"/>
+  <line x1="43" y1="50" x2="62" y2="49" stroke="#CCC" stroke-width="0.9" stroke-linecap="round"/>
 
-  <!-- Corner rivets (robot bolts) -->
-  <circle cx="13.5" cy="10.5" r="1.4" fill="#888" stroke="#666" stroke-width="0.4"/>
-  <circle cx="50.5" cy="10.5" r="1.4" fill="#888" stroke="#666" stroke-width="0.4"/>
-  <circle cx="13.5" cy="51" r="1.4" fill="#888" stroke="#666" stroke-width="0.4"/>
-  <circle cx="50.5" cy="51" r="1.4" fill="#888" stroke="#666" stroke-width="0.4"/>
 </svg>
