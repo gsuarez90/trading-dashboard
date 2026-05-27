@@ -60,11 +60,20 @@ def _cache_is_fresh(cached_at: str | None) -> bool:
 
 
 def get_cached_scanner(tickers: list[str] | None = None, limit: int = 20) -> list[dict] | None:
-    """Return cached scanner movers if fresh, else None."""
+    """Return live-priced movers for the cached ticker watchlist if cache is fresh, else None.
+
+    The cache stores only ticker symbols (selected at morning refresh). Prices, change %,
+    and volume are always fetched live — get_previous_day_movers() calls the Schwab real-time
+    quotes endpoint despite its name; "previous day" refers to the change % baseline only.
+    """
     data, cached_at = dynamo_service.get_cache("scanner")
     if data is not None and _cache_is_fresh(cached_at):
-        movers = data if tickers is None else [m for m in data if m["ticker"] in set(tickers)]
-        return movers[:limit]
+        # data is a list of ticker strings, not full mover objects
+        cached_tickers = data if tickers is None else [t for t in data if t in set(tickers)]
+        try:
+            return schwab_service.get_previous_day_movers(cached_tickers, limit=limit)
+        except Exception:
+            return None
     return None
 
 
@@ -119,7 +128,8 @@ def run_daily_refresh() -> dict:
     # Scanner / movers
     try:
         movers = schwab_service.get_previous_day_movers(tickers, limit=50)
-        dynamo_service.put_cache("scanner", movers)
+        # Cache only ticker symbols — prices/change%/volume are fetched live at read time
+        dynamo_service.put_cache("scanner", [m["ticker"] for m in movers])
         scanner_count = len(movers)
     except Exception as e:
         errors.append(f"scanner: {e}")

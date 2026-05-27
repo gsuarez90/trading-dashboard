@@ -136,7 +136,11 @@ def _cache_is_fresh(cached_at: str) -> bool:
 
 
 def _cached_scanner_results(min_change_pct: float) -> list[dict] | None:
-    """Return DynamoDB-cached scanner data if written on or after the last refresh date.
+    """Return live-priced scanner results for the cached ticker watchlist, filtered by min_change_pct.
+
+    The cache stores only ticker symbols selected at morning refresh. Prices, change %, and
+    volume are fetched live via get_previous_day_movers(), which calls the Schwab real-time
+    quotes endpoint — "previous day" refers to the change % baseline, not data staleness.
 
     Duplicates cache_service._last_refresh_date logic to avoid circular import
     (cache_service imports context_loader, so the reverse is not possible).
@@ -145,7 +149,9 @@ def _cached_scanner_results(min_change_pct: float) -> list[dict] | None:
         data, cached_at = dynamo_service.get_cache("scanner")
         if data is None or not cached_at or not _cache_is_fresh(cached_at):
             return None
-        return [m for m in data if abs(m.get("change_pct", 0)) >= min_change_pct]
+        # data is a list of ticker strings; fetch live quotes for them
+        live = schwab_service.get_previous_day_movers(data, limit=len(data))
+        return [m for m in live if abs(m.get("change_pct", 0)) >= min_change_pct]
     except Exception:
         return None
 
