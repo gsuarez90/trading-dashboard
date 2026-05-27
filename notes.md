@@ -793,3 +793,37 @@ The only real loss is **structured HTTP access logs**. API Gateway has a dedicat
 ### The Legacy API Gateway URL
 
 `TradingHttpApi` is still in `template.yaml` (and still deployed) as a rollback option. It's the `ApiUrl` CloudFormation output. It has the 29s ceiling and is unused by both frontends. It can be removed in a future cleanup once the Function URL approach is confirmed stable.
+
+## Reward/Risk Ratio — How the 1.5 Minimum Works
+
+The R/R ratio measures how much you expect to gain versus how much you risk on a trade. Formula:
+
+```
+R/R = (target_price - entry_price) / (entry_price - stop_loss)   ← long
+R/R = (entry_price - target_price) / (stop_loss - entry_price)   ← short
+```
+
+Shares cancel out so only price distances matter.
+
+Example:
+```
+Entry: $100  |  Target: $103  |  Stop: $98
+R/R = $3 / $2 = 1.50  ✅ passes
+
+Entry: $100  |  Target: $102  |  Stop: $98
+R/R = $2 / $2 = 1.00  ❌ blocked
+```
+
+Why 1.5 is the floor — expected value at different win rates:
+
+```
+R/R  | Win 50% EV  | Break-even win rate
+1.0  | $0.00        | 50%
+1.5  | +$0.25       | 40%   ← guardrail minimum
+2.0  | +$0.50       | 33%
+```
+
+At R/R = 1.5 you can be wrong 40% of the time and still be profitable over enough trades:
+`(0.60 × $1.50) - (0.40 × $1.00) = +$0.50 per trade`
+
+The guardrail checks `trade.reward_risk_ratio >= 1.5` before allowing any paper or live trade to be logged. The ratio is computed by Claude at suggestion time from its proposed entry/target/stop prices.
