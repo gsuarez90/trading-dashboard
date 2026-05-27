@@ -142,7 +142,8 @@ myAITradingApp/
 │
 ├── scripts/
 │   ├── start.sh                      # Local dev startup — activates venv, loads .env.local, starts backend + frontend
-│   └── schwab_auth.py                # One-time OAuth flow to generate schwab_token.json for local dev
+│   ├── schwab_auth.py                # One-time OAuth flow to generate schwab_token.json for local dev
+│   └── backfill_paper_pnl.py         # One-time script — seeds cache#paper_pnl from existing closed trade history
 │
 ├── template.yaml                     # SAM template — defines every AWS resource
 ├── samconfig.toml                    # SAM deploy defaults (region, stack name)
@@ -424,8 +425,8 @@ Kill switch (two-step confirm):
 ### 9. Paper Trading Panel
 
 ```
-Trigger:     Panel expands (loads on first expand)
-Frontend:    PaperTradingPanel.jsx — 3 tabs
+Trigger:     Page loads — panel mounts automatically (useEffect on mount)
+Frontend:    PaperTradingPanel.jsx — 4 tabs: Open / Pending / History / Summary
 
 Open tab:    GET /api/paper-trades/?date=today
                └─ dynamo_service.get_trades_by_date(today) → filters open
@@ -435,13 +436,21 @@ Open tab:    GET /api/paper-trades/?date=today
                └─ paper_trading_service.close_trade()
                └─ Computes realized P&L: (exit - entry) × shares (reversed for short)
                └─ Updates DynamoDB: status="closed", exit_price, realized_pnl
+               └─ Atomically increments cache#paper_pnl cumulative counter
 
-History tab: Same fetch, shows closed trades with entry/exit/P&L per trade
+Pending tab: GET /api/paper-trades/pending?date=today
+               └─ dynamo_service.get_pending_trades_for_date(today)
+             Shows unfilled limit orders waiting for price trigger
+             Cancel button: POST /api/paper-trades/{id}/cancel
+               └─ Sets status="cancelled" (preserved in history, not refetched as open)
+
+History tab: Same fetch as Open tab, shows closed/cancelled/expired trades with entry/exit/P&L
 
 Summary tab: GET /api/paper-trades/summary?date=today
                └─ paper_trading_service.get_daily_summary(today, trading_mode)
-             Shows: total realized P&L vs daily goal ($100), open position count,
-                    time the goal was first hit (if applicable)
+             Shows: today's realized P&L vs daily goal, open position count,
+                    time goal was first hit (if applicable),
+                    all-time cumulative paper P&L (from cache#paper_pnl counter)
 ```
 
 ---
@@ -449,8 +458,8 @@ Summary tab: GET /api/paper-trades/summary?date=today
 ### 10. Live Tracking Panel
 
 ```
-Trigger:     Panel expands
-Frontend:    LiveTrackingPanel.jsx — same 3-tab structure as PaperTradingPanel
+Trigger:     Page loads — panel mounts automatically (useEffect on mount)
+Frontend:    LiveTrackingPanel.jsx — same 4-tab structure as PaperTradingPanel
              Fetches from GET /api/live-trades/
 
 Mode notice: If TRADING_MODE != "live", amber banner:
@@ -557,7 +566,7 @@ Written by `paper_trading_service.open_trade()` and `dynamo_service.put_trade()`
 
 ### Cache items
 
-`trade_id` = `"cache#scanner"`, `"cache#sentiment"`, or `"cache#briefing"`. Payload stored as JSON string. Written by `dynamo_service.put_cache()`, read by `dynamo_service.get_cache()`.
+`trade_id` = `"cache#scanner"`, `"cache#sentiment"`, `"cache#briefing"`, `"cache#briefing_live"`, or `"cache#paper_pnl"`. Most payloads stored as JSON string via `dynamo_service.put_cache()` / `get_cache()`. Exception: `cache#paper_pnl` stores a raw `Decimal` `total` attribute updated via DynamoDB `ADD` (atomic increment) on every paper trade close — it is the all-time cumulative realized P&L counter.
 
 Freshness check in `cache_service._cache_is_fresh(cached_at)`: parses `cached_at` as ISO timestamp, converts to ET, returns `True` only if it matches today's ET date. Cache is never invalidated mid-day — it goes stale at midnight ET.
 
@@ -713,7 +722,7 @@ All 8 guardrails run through `guardrail_service.check_all()` in `backend/service
 | `position_size_cap` | Trade value vs available cash | Position exceeds `MAX_POSITION_SIZE_PCT` (20% default) of cash |
 | `cost_basis_protection` | Entry price vs avg cost on held positions | Entry is below your cost basis — would realize a loss on a winner. Override with `allow_loss=true` |
 | `reward_risk_minimum` | Target gain ÷ max loss | Ratio is below 1.5 |
-| `daily_trade_limit` | Trades placed today | `DAILY_TRADE_LIMIT` (3 default) already reached |
+| `daily_trade_limit` | Trades placed today | `DAILY_TRADE_LIMIT` (3 default) already reached. Bypassed when `PDT_EXEMPT=true` in SSM (for accounts above the $25k PDT threshold) |
 | `market_hours_lock` | Current time (ET) | Outside 9:30am–4:00pm ET, Monday–Friday |
 | `intraday_60min_cutoff` | Current time for intraday trades | After 3:00pm ET — less than 60 minutes left in session |
 | `buying_power_check` | Trade value vs cash balance | Insufficient cash to cover the full position |

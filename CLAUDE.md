@@ -99,6 +99,16 @@ Cache freshness is ET-date-based (not TTL). `cache_service._cache_is_fresh()` co
 
 ---
 
+## Commit Messages
+
+Always end every commit message body with both trailers, in this order:
+```
+Co-Authored-By: gsuarez90 <gsuarez90@users.noreply.github.com>
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+```
+
+---
+
 ## Key Constraints
 
 - **Never commit** `.env.local` or `schwab_token.json` — both are gitignored
