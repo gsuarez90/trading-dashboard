@@ -50,6 +50,11 @@ function SummaryBar({ summary }) {
         <Text size="xs" c="dimmed">
           Open <Text span fw={600}>{summary.open_positions}</Text>
         </Text>
+        {summary.cumulative_pnl != null && (
+          <Text size="xs" c="dimmed">
+            All-Time <Text span fw={600} ff="mono" c={summary.cumulative_pnl >= 0 ? 'green' : 'red'}>{fmt(summary.cumulative_pnl)}</Text>
+          </Text>
+        )}
         {summary.goal_hit && (
           <Badge color="green" size="xs" radius="xl" variant="light">
             GOAL HIT{summary.goal_hit_time ? ` @ ${fmtTime(summary.goal_hit_time)}` : ''}
@@ -227,6 +232,7 @@ function SummaryTab({ summary }) {
         ['Open Positions', summary.open_positions, null],
         ['Goal Hit',       summary.goal_hit ? `Yes @ ${fmtTime(summary.goal_hit_time)}` : 'Not yet', null],
         ['Mode',           summary.trading_mode,  null],
+        ['All-Time P&L',   fmt(summary.cumulative_pnl ?? 0), (summary.cumulative_pnl ?? 0) >= 0 ? 'green' : 'red'],
       ].map(([label, val, color]) => (
         <Paper key={label} p="xs" radius="xs">
           <Text size="xs" c="dimmed" mb={3}>{label}</Text>

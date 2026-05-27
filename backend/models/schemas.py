@@ -82,6 +82,7 @@ class DailyCashSummary(BaseModel):
     date: str
     goal: float
     realized_pnl: float
+    cumulative_pnl: float = 0.0
     open_positions: int
     goal_hit: bool
     goal_hit_time: str | None

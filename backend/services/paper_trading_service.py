@@ -152,6 +152,10 @@ def close_trade(trade_id: str, exit_price: float, close_reason: str = "manual") 
         "close_reason": close_reason,
     }
     dynamo_service.update_trade(trade_id, updates)
+    try:
+        dynamo_service.increment_paper_pnl_cumulative(realized_pnl)
+    except Exception:
+        pass
     return {**trade, **updates}
 
 
@@ -178,10 +182,13 @@ def get_daily_summary(today: str, trading_mode: str) -> DailyCashSummary:
         "Intraday cash — settles T+1" if trading_mode == "paper" else "Live trades settle T+2"
     )
 
+    cumulative_pnl = dynamo_service.get_paper_pnl_cumulative()
+
     return DailyCashSummary(
         date=today,
         goal=goal,
         realized_pnl=realized_pnl,
+        cumulative_pnl=cumulative_pnl,
         open_positions=open_positions,
         goal_hit=goal_hit,
         goal_hit_time=goal_hit_time,

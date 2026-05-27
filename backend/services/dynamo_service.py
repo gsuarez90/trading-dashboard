@@ -218,6 +218,28 @@ def get_cache(key: str) -> tuple[list | dict | None, str | None]:
     return json.loads(item["payload"]), item.get("cached_at")
 
 
+def increment_paper_pnl_cumulative(amount: float) -> None:
+    """Atomically add amount to the all-time paper P&L running total."""
+    _table().update_item(
+        Key={"trade_id": "cache#paper_pnl"},
+        UpdateExpression="SET #status = if_not_exists(#status, :s) ADD #total :amt",
+        ExpressionAttributeNames={"#total": "total", "#status": "status"},
+        ExpressionAttributeValues={
+            ":amt": Decimal(str(round(amount, 2))),
+            ":s": "cache",
+        },
+    )
+
+
+def get_paper_pnl_cumulative() -> float:
+    """Return all-time realized paper P&L. Returns 0.0 if the counter has not been seeded."""
+    resp = _table().get_item(Key={"trade_id": "cache#paper_pnl"})
+    item = resp.get("Item")
+    if not item:
+        return 0.0
+    return float(item.get("total", Decimal("0")))
+
+
 def get_guardrail_events_by_date(date: str) -> list[dict]:
     """Fetch all guardrail events for a given date, newest first."""
     response = _table().query(
