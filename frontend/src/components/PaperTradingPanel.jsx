@@ -268,7 +268,13 @@ export default function PaperTradingPanel() {
       .catch(e => { setError(String(e)); setLoading(false) })
   }, [])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    load()
+    const id = setInterval(() => {
+      if (document.visibilityState === 'visible') load()
+    }, 30_000)
+    return () => clearInterval(id)
+  }, [load])
 
   function toggleExpand() {
     setExpanded(e => !e)
