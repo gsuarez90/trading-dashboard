@@ -50,7 +50,7 @@ function StatusCards({ status }) {
     {
       label: 'Daily Trades',
       value: trades.triggered ? 'LIMIT HIT' : 'OK',
-      sub: trades.limit == null ? `${trades.trades_today} trades (Unlimited)` : `${trades.trades_today} of ${trades.limit} trades`,
+      sub: trades.pdt_exempt ? `${trades.trades_today} trades (Unlimited)` : `${trades.trades_today} of ${trades.limit} trades`,
       ok: !trades.triggered,
     },
   ]
