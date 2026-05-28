@@ -169,7 +169,7 @@ def get_status(ctx: GuardrailContext) -> dict:
             "triggered": ctx.realized_pnl_today <= -limit,
         },
         "daily_trade_limit": {
-            "limit": trade_limit,
+            "limit": None if pdt_exempt else trade_limit,
             "trades_today": ctx.trade_count_today,
             "triggered": False if pdt_exempt else ctx.trade_count_today >= trade_limit,
             "pdt_exempt": pdt_exempt,
