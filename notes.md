@@ -850,4 +850,50 @@ aws lambda update-function-configuration --function-name trading-dashboard-Tradi
 ```
 Repeat for `TradingDashboardPrivateFunction`. Wait ~30 seconds, then refresh the app.
 
+**Easier: use the reauth script (handles all steps automatically)**
+```bash
+python scripts/schwab_reauth.py
+```
+Deletes local token first to force a fresh browser OAuth, then uploads to Secrets Manager and cold-starts all 6 Schwab Lambda functions.
+
+## CloudWatch Alarm — Schwab Token Expiry
+
+A CloudWatch alarm fires an SNS email the moment `token_invalid` or `invalid_grant` appears in either `PriceMonitorFunction` or `DailyRefreshFunction` logs. Alarm name: `SchwabTokenExpired`.
+
+**Setup (one-time, already done):**
+```powershell
+# 1. Create SNS topic
+aws sns create-topic --name trading-dashboard-alerts
+
+# 2. Subscribe email
+aws sns subscribe --topic-arn <TOPIC-ARN> --protocol email --notification-endpoint <YOUR-EMAIL>
+# Confirm via the link in the email before continuing
+
+# 3. Metric filters on both log groups
+aws logs put-metric-filter `
+  --log-group-name "/aws/lambda/trading-dashboard-PriceMonitorFunction-<ID>" `
+  --filter-name "SchwabTokenErrors" `
+  --filter-pattern "?token_invalid ?invalid_grant" `
+  --metric-transformations metricName=SchwabTokenErrors,metricNamespace=TradingDashboard,metricValue=1,defaultValue=0
+
+aws logs put-metric-filter `
+  --log-group-name "/aws/lambda/trading-dashboard-DailyRefreshFunction-<ID>" `
+  --filter-name "SchwabTokenErrors" `
+  --filter-pattern "?token_invalid ?invalid_grant" `
+  --metric-transformations metricName=SchwabTokenErrors,metricNamespace=TradingDashboard,metricValue=1,defaultValue=0
+
+# 4. Create alarm (fires on 1 error in 5-min window)
+aws cloudwatch put-metric-alarm `
+  --alarm-name "SchwabTokenExpired" `
+  --namespace TradingDashboard `
+  --metric-name SchwabTokenErrors `
+  --statistic Sum --period 300 --evaluation-periods 1 `
+  --threshold 1 --comparison-operator GreaterThanOrEqualToThreshold `
+  --alarm-actions <TOPIC-ARN> --treat-missing-data notBreaching
+```
+
+**Why only two log groups:** PriceMonitor catches token errors within 60 seconds (runs every minute during market hours). DailyRefresh covers the case where there are no open trades and PriceMonitor short-circuits without calling Schwab. Other functions are redundant.
+
+**When the alarm fires:** run `python scripts/schwab_reauth.py`.
+
 The guardrail checks `trade.reward_risk_ratio >= 1.5` before allowing any paper or live trade to be logged. The ratio is computed by Claude at suggestion time from its proposed entry/target/stop prices.
