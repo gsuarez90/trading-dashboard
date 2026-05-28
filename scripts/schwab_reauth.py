@@ -47,6 +47,13 @@ def _schwab_lambda_names() -> list[str]:
 
 def main():
     # ── Step 1: OAuth flow ────────────────────────────────────────────────────
+    # Always delete the local token first so easy_client() is forced to open
+    # the browser. Without this, it loads the cached local token which may be
+    # older than what Secrets Manager already has (Lambda rolls tokens in-place),
+    # and uploading a stale token invalidates the newer one Schwab already issued.
+    if TOKEN_PATH.exists():
+        TOKEN_PATH.unlink()
+        print("  Cleared cached local token.")
     print("\nStep 1 — Opening browser for Schwab OAuth...")
     print("  Log in, authorize the app, then return here.\n")
     schwab.auth.easy_client(
