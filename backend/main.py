@@ -1,5 +1,9 @@
+import logging
 import os
 from pathlib import Path
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 from dotenv import load_dotenv
 
@@ -76,21 +80,25 @@ handler = Mangum(app)
 
 def price_monitor_handler(event, context):
     """Every 5 min during market hours — auto-closes paper trades at target/stop."""
+    logger.info("price_monitor_handler invoked")
     return cache_service.run_price_monitor()
 
 
 def end_of_day_handler(event, context):
     """3:45pm ET — closes all open paper trades, flags live trades for manual close."""
+    logger.info("end_of_day_handler invoked")
     return cache_service.run_end_of_day()
 
 
 def refresh_handler(event, context):
     """9:35am ET weekdays — scanner + sentiment + synthetic briefing → DynamoDB cache."""
+    logger.info("refresh_handler invoked")
     return cache_service.run_daily_refresh()
 
 
 def refresh_live_briefing_handler(event, context):
     """9:35am ET weekdays — live briefing with real Robinhood portfolio → DynamoDB cache."""
+    logger.info("refresh_live_briefing_handler invoked")
     return cache_service.run_live_briefing_refresh()
 
 

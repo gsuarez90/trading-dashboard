@@ -7,6 +7,7 @@ Three scheduled jobs:
   run_end_of_day()      — 3:45pm ET: close all open paper trades, flag live trades
 """
 
+import logging
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -15,6 +16,8 @@ from services import paper_trading_service
 from services.context_loader import _get_watchlist, load_context
 
 ET = ZoneInfo("America/New_York")
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 
 # ── Cache helpers ─────────────────────────────────────────────────────────────
@@ -111,27 +114,33 @@ def store_live_briefing(briefing_text: str, date: str) -> None:
 
 def run_live_briefing_refresh() -> dict:
     """9:35am ET weekdays — generate morning briefing with live Robinhood portfolio context."""
+    logger.info("Live briefing refresh starting")
     try:
         ctx = load_context()
         briefing_text = claude_service.morning_briefing(ctx)
         store_live_briefing(briefing_text, ctx.date)
+        logger.info("Live briefing refresh complete")
         return {"refreshed_at": datetime.now(tz=ET).isoformat(), "briefing_cached": True}
     except Exception as e:
+        logger.error("Live briefing refresh failed: %s", e, exc_info=True)
         return {"refreshed_at": datetime.now(tz=ET).isoformat(), "briefing_cached": False, "error": str(e)}
 
 
 def run_daily_refresh() -> dict:
     """7:00am ET — pre-compute scanner + sentiment and write to DynamoDB cache."""
+    logger.info("Daily refresh starting")
     tickers = _get_watchlist()
+    logger.info("Watchlist: %d tickers", len(tickers))
     errors = []
 
     # Scanner / movers
     try:
         movers = schwab_service.get_previous_day_movers(tickers, limit=50)
-        # Cache only ticker symbols — prices/change%/volume are fetched live at read time
         dynamo_service.put_cache("scanner", [m["ticker"] for m in movers])
         scanner_count = len(movers)
+        logger.info("Scanner cached %d tickers", scanner_count)
     except Exception as e:
+        logger.error("Scanner failed: %s", e, exc_info=True)
         errors.append(f"scanner: {e}")
         scanner_count = 0
 
@@ -141,7 +150,9 @@ def run_daily_refresh() -> dict:
         sentiment = finnhub_service.score_batch_sentiment(sentiment_tickers)
         dynamo_service.put_cache("sentiment", sentiment)
         sentiment_count = len(sentiment)
+        logger.info("Sentiment scored %d tickers", sentiment_count)
     except Exception as e:
+        logger.error("Sentiment failed: %s", e, exc_info=True)
         errors.append(f"sentiment: {e}")
         sentiment_count = 0
 
@@ -151,9 +162,17 @@ def run_daily_refresh() -> dict:
         briefing_text = claude_service.morning_briefing(ctx)
         dynamo_service.put_cache("briefing", {"briefing": briefing_text, "date": ctx.date})
         briefing_ok = True
+        logger.info("Briefing cached")
     except Exception as e:
+        logger.error("Briefing failed: %s", e, exc_info=True)
         errors.append(f"briefing: {e}")
         briefing_ok = False
+
+    if errors:
+        logger.warning("Daily refresh completed with errors: %s", errors)
+    else:
+        logger.info("Daily refresh complete — scanner=%d sentiment=%d briefing=%s",
+                    scanner_count, sentiment_count, briefing_ok)
 
     return {
         "refreshed_at": datetime.now(tz=ET).isoformat(),
@@ -176,13 +195,18 @@ def run_price_monitor() -> dict:
     pending_trades = dynamo_service.get_pending_trades_for_date(today)
 
     if not open_trades and not pending_trades:
+        logger.info("Price monitor: no open or pending trades")
         return {"checked": 0, "filled": 0, "closed": 0, "flagged": 0}
+
+    logger.info("Price monitor: %d open, %d pending", len(open_trades), len(pending_trades))
 
     # Single batch quote call covering all unique tickers
     all_tickers = list({t["ticker"] for t in open_trades + pending_trades if t.get("ticker")})
     try:
         quotes = {q["ticker"]: q["price"] for q in schwab_service.get_batch_quotes(all_tickers)}
-    except Exception:
+        logger.info("Price monitor: quotes fetched for %d tickers", len(quotes))
+    except Exception as e:
+        logger.error("Price monitor: Schwab quotes failed — trades will not be evaluated: %s", e, exc_info=True)
         quotes = {}
 
     now_iso = datetime.now(tz=ET).isoformat()
@@ -207,8 +231,9 @@ def run_price_monitor() -> dict:
         try:
             paper_trading_service.fill_pending_order(trade["trade_id"], price)
             filled += 1
-        except Exception:
-            pass
+            logger.info("Filled pending order %s %s @ %.2f", ticker, trade["trade_id"], price)
+        except Exception as e:
+            logger.error("Failed to fill pending order %s: %s", trade["trade_id"], e)
 
     # ── Monitor open trades ───────────────────────────────────────────────────
     for trade in open_trades:
@@ -238,8 +263,9 @@ def run_price_monitor() -> dict:
             try:
                 paper_trading_service.close_trade(trade["trade_id"], price, close_reason)
                 closed += 1
-            except Exception:
-                pass
+                logger.info("Closed paper trade %s %s @ %.2f (%s)", ticker, trade["trade_id"], price, close_reason)
+            except Exception as e:
+                logger.error("Failed to close paper trade %s: %s", trade["trade_id"], e)
         else:
             try:
                 dynamo_service.update_trade(
@@ -252,9 +278,11 @@ def run_price_monitor() -> dict:
                     },
                 )
                 flagged += 1
-            except Exception:
-                pass
+                logger.info("Flagged live trade %s %s for manual close (%s)", ticker, trade["trade_id"], close_reason)
+            except Exception as e:
+                logger.error("Failed to flag live trade %s: %s", trade["trade_id"], e)
 
+    logger.info("Price monitor complete — filled=%d closed=%d flagged=%d", filled, closed, flagged)
     return {
         "checked": len(open_trades) + len(pending_trades),
         "filled": filled,
@@ -265,19 +293,26 @@ def run_price_monitor() -> dict:
 
 def run_end_of_day() -> dict:
     """3:45pm ET — expire pending orders, close open paper trades, flag live trades."""
+    logger.info("EOD handler starting")
     today = datetime.now(tz=ET).strftime("%Y-%m-%d")
 
     # Expire any orders that never filled today
     expired = paper_trading_service.expire_unfilled_orders(today)
+    if expired:
+        logger.info("EOD: expired %d unfilled orders", expired)
 
     open_trades = dynamo_service.get_open_trades()
     if not open_trades:
+        logger.info("EOD: no open trades")
         return {"paper_closed": 0, "live_flagged": 0, "expired": expired}
 
+    logger.info("EOD: processing %d open trades", len(open_trades))
     tickers = list({t["ticker"] for t in open_trades if t.get("ticker")})
     try:
         quotes = {q["ticker"]: q["price"] for q in schwab_service.get_batch_quotes(tickers)}
-    except Exception:
+        logger.info("EOD: quotes fetched for %d tickers", len(quotes))
+    except Exception as e:
+        logger.error("EOD: Schwab quotes failed — using entry prices as fallback: %s", e, exc_info=True)
         quotes = {}
 
     now_iso = datetime.now(tz=ET).isoformat()
@@ -294,8 +329,9 @@ def run_end_of_day() -> dict:
             try:
                 paper_trading_service.close_trade(trade["trade_id"], exit_price, "eod_close")
                 paper_closed += 1
-            except Exception:
-                pass
+                logger.info("EOD: closed paper trade %s %s @ %.2f", ticker, trade["trade_id"], exit_price)
+            except Exception as e:
+                logger.error("EOD: failed to close paper trade %s: %s", trade["trade_id"], e)
         else:
             try:
                 dynamo_service.update_trade(
@@ -307,7 +343,9 @@ def run_end_of_day() -> dict:
                     },
                 )
                 live_flagged += 1
-            except Exception:
-                pass
+                logger.info("EOD: flagged live trade %s %s for manual close", ticker, trade["trade_id"])
+            except Exception as e:
+                logger.error("EOD: failed to flag live trade %s: %s", trade["trade_id"], e)
 
+    logger.info("EOD complete — paper_closed=%d live_flagged=%d expired=%d", paper_closed, live_flagged, expired)
     return {"paper_closed": paper_closed, "live_flagged": live_flagged, "expired": expired}
