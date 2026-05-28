@@ -826,4 +826,28 @@ R/R  | Win 50% EV  | Break-even win rate
 At R/R = 1.5 you can be wrong 40% of the time and still be profitable over enough trades:
 `(0.60 × $1.50) - (0.40 × $1.00) = +$0.50 per trade`
 
+## Schwab Token Refresh — How To
+
+Schwab refresh tokens expire (roughly weekly if not used). When you see `invalid_grant` / `unsupported_token_type` errors on market data calls, the token needs to be re-issued via the full OAuth flow.
+
+**Step 1 — Re-authenticate locally**
+```bash
+python scripts/schwab_auth.py
+```
+Opens a browser to Schwab login. After authorizing, the token is written to `backend/schwab_token.json`. The file is gitignored so `git status` won't show the change — verify with `ls -la backend/schwab_token.json` (bash) or `(Get-Item backend\schwab_token.json).LastWriteTime` (PowerShell).
+
+**Step 2 — Upload new token to Secrets Manager (for Lambda)**
+```powershell
+aws cloudformation describe-stacks --stack-name trading-dashboard --query "Stacks[0].Outputs[?OutputKey=='SchwabTokenSecretArn'].OutputValue" --output text
+$token = Get-Content "backend\schwab_token.json" -Raw
+aws secretsmanager put-secret-value --secret-id <ARN> --secret-string $token
+```
+
+**Step 3 — Force Lambda cold start**
+Warm containers hold the old expired token in memory as a singleton. Bump the description on both functions to force recycling:
+```powershell
+aws lambda update-function-configuration --function-name trading-dashboard-TradingDashboardFunction-<ID> --description "token-refresh-$(Get-Date -Format yyyyMMddHHmm)"
+```
+Repeat for `TradingDashboardPrivateFunction`. Wait ~30 seconds, then refresh the app.
+
 The guardrail checks `trade.reward_risk_ratio >= 1.5` before allowing any paper or live trade to be logged. The ratio is computed by Claude at suggestion time from its proposed entry/target/stop prices.
