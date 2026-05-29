@@ -289,7 +289,8 @@ Resources:
           Properties:
             Schedule: cron(35 13 ? * MON-FRI *)
 
-  # Daily 9:35am ET — live briefing for private URL (same cron, PORTFOLIO_MODE=live)
+  # Daily 9:40am ET — live briefing for private URL (5min after DailyRefreshFunction so
+  # scanner+sentiment are already in DDB when load_context() runs here)
   DailyRefreshLiveBriefingFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -308,7 +309,7 @@ Resources:
         DailyTrigger:
           Type: Schedule
           Properties:
-            Schedule: cron(35 13 ? * MON-FRI *)
+            Schedule: cron(40 13 ? * MON-FRI *)
 
   # Nightly analytics — Phase 2 (stub, not active)
   AnalyticsFunction:
