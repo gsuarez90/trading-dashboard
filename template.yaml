@@ -241,7 +241,7 @@ Resources:
         - !Ref RobinhoodSecretsPolicy
         - !Ref SsmApiKeysPolicy
 
-  # Price monitor — every 1 min during market hours (9:00am–4:59pm ET = 13:00–20:59 UTC)
+  # Price monitor — every 1 min during market hours (9:00am–4:59pm ET)
   PriceMonitorFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -252,26 +252,29 @@ Resources:
         - !Ref SsmApiKeysPolicy
       Events:
         MarketHours:
-          Type: Schedule
+          Type: ScheduleV2
           Properties:
-            Schedule: cron(* 13-20 ? * MON-FRI *)
+            ScheduleExpression: cron(* 9-16 ? * MON-FRI *)
+            ScheduleExpressionTimezone: America/New_York
 
-  # End of day — 3:45pm ET (20:45 UTC)
+  # End of day — 3:45pm ET
   EndOfDayFunction:
     Type: AWS::Serverless::Function
     Properties:
       Handler: main.end_of_day_handler
+      Timeout: 120
       Policies:
         - !Ref DynamoPolicy
         - !Ref SchwabSecretsPolicy
         - !Ref SsmApiKeysPolicy
       Events:
         EOD:
-          Type: Schedule
+          Type: ScheduleV2
           Properties:
-            Schedule: cron(45 20 ? * MON-FRI *)
+            ScheduleExpression: cron(45 15 ? * MON-FRI *)
+            ScheduleExpressionTimezone: America/New_York
 
-  # Daily 9:35am ET refresh — scanner + sentiment + briefing → DynamoDB cache (13:35 UTC, Mon-Fri)
+  # Daily 9:35am ET refresh — scanner + sentiment + briefing → DynamoDB cache
   # Runs after market open so _get_watchlist() returns live movers instead of _DEFAULT_TICKERS.
   DailyRefreshFunction:
     Type: AWS::Serverless::Function
@@ -285,9 +288,10 @@ Resources:
         - !Ref SsmApiKeysPolicy
       Events:
         DailyTrigger:
-          Type: Schedule
+          Type: ScheduleV2
           Properties:
-            Schedule: cron(35 13 ? * MON-FRI *)
+            ScheduleExpression: cron(35 9 ? * MON-FRI *)
+            ScheduleExpressionTimezone: America/New_York
 
   # Daily 9:40am ET — live briefing for private URL (5min after DailyRefreshFunction so
   # scanner+sentiment are already in DDB when load_context() runs here)
@@ -307,9 +311,10 @@ Resources:
         - !Ref SsmApiKeysPolicy
       Events:
         DailyTrigger:
-          Type: Schedule
+          Type: ScheduleV2
           Properties:
-            Schedule: cron(40 13 ? * MON-FRI *)
+            ScheduleExpression: cron(40 9 ? * MON-FRI *)
+            ScheduleExpressionTimezone: America/New_York
 
   # Nightly analytics — Phase 2 (stub, not active)
   AnalyticsFunction:
