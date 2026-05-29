@@ -251,7 +251,7 @@ Resources:
         - !Ref SchwabSecretsPolicy
         - !Ref SsmApiKeysPolicy
       Events:
-        MarketHours:
+        MarketHoursV2:
           Type: ScheduleV2
           Properties:
             ScheduleExpression: cron(* 9-16 ? * MON-FRI *)
@@ -268,7 +268,7 @@ Resources:
         - !Ref SchwabSecretsPolicy
         - !Ref SsmApiKeysPolicy
       Events:
-        EOD:
+        EODV2:
           Type: ScheduleV2
           Properties:
             ScheduleExpression: cron(45 15 ? * MON-FRI *)
@@ -287,7 +287,7 @@ Resources:
         - !Ref SchwabSecretsPolicy
         - !Ref SsmApiKeysPolicy
       Events:
-        DailyTrigger:
+        DailyTriggerV2:
           Type: ScheduleV2
           Properties:
             ScheduleExpression: cron(35 9 ? * MON-FRI *)
@@ -310,7 +310,7 @@ Resources:
         - !Ref RobinhoodSecretsPolicy
         - !Ref SsmApiKeysPolicy
       Events:
-        DailyTrigger:
+        DailyTriggerV2:
           Type: ScheduleV2
           Properties:
             ScheduleExpression: cron(40 9 ? * MON-FRI *)
