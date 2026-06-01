@@ -274,7 +274,7 @@ Resources:
             ScheduleExpression: cron(45 15 ? * MON-FRI *)
             ScheduleExpressionTimezone: America/New_York
 
-  # Daily 9:35am ET refresh — scanner + sentiment + briefing → DynamoDB cache
+  # Daily 9:32am ET refresh — scanner + sentiment + briefing → DynamoDB cache
   # Runs after market open so _get_watchlist() returns live movers instead of _DEFAULT_TICKERS.
   DailyRefreshFunction:
     Type: AWS::Serverless::Function
@@ -290,10 +290,10 @@ Resources:
         DailyTriggerV2:
           Type: ScheduleV2
           Properties:
-            ScheduleExpression: cron(35 9 ? * MON-FRI *)
+            ScheduleExpression: cron(32 9 ? * MON-FRI *)
             ScheduleExpressionTimezone: America/New_York
 
-  # Daily 9:40am ET — live briefing for private URL (5min after DailyRefreshFunction so
+  # Daily 9:35am ET — live briefing for private URL (3min after DailyRefreshFunction so
   # scanner+sentiment are already in DDB when load_context() runs here)
   DailyRefreshLiveBriefingFunction:
     Type: AWS::Serverless::Function
@@ -313,7 +313,7 @@ Resources:
         DailyTriggerV2:
           Type: ScheduleV2
           Properties:
-            ScheduleExpression: cron(40 9 ? * MON-FRI *)
+            ScheduleExpression: cron(35 9 ? * MON-FRI *)
             ScheduleExpressionTimezone: America/New_York
 
   # Nightly analytics — Phase 2 (stub, not active)

@@ -2,7 +2,7 @@
 DynamoDB-backed cache layer + Lambda handler implementations.
 
 Three scheduled jobs:
-  run_daily_refresh()   — 7:00am ET: scanner + sentiment → DynamoDB
+  run_daily_refresh()   — 9:32am ET: scanner + sentiment + briefing → DynamoDB
   run_price_monitor()   — every 5 min, market hours: auto-close paper trades at target/stop
   run_end_of_day()      — 3:45pm ET: close all open paper trades, flag live trades
 """
@@ -24,19 +24,19 @@ logger.setLevel(logging.INFO)
 
 
 def _last_refresh_date() -> date:
-    """Date of the most recent expected 9:35am ET weekday refresh.
+    """Date of the most recent expected 9:32am ET weekday refresh.
 
     Used to determine whether cached data is still valid across weekends and
-    Monday pre-market (before the 9:35am refresh fires).
+    Monday pre-market (before the 9:32am refresh fires).
     """
     now_et = datetime.now(tz=ET)
     d = now_et.date()
     wd = d.weekday()  # Mon=0 … Fri=4, Sat=5, Sun=6
     if wd < 5:  # Weekday
         h, m = now_et.hour, now_et.minute
-        if h > 9 or (h == 9 and m >= 35):
-            return d  # Today's 9:35am refresh has already run
-        # Before 9:35am — last refresh was the previous weekday
+        if h > 9 or (h == 9 and m >= 32):
+            return d  # Today's 9:32am refresh has already run
+        # Before 9:32am — last refresh was the previous weekday
         d -= timedelta(days=1)
         while d.weekday() >= 5:
             d -= timedelta(days=1)

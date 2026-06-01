@@ -25,6 +25,13 @@ export default function DailySummaryPanel() {
   const minsLeft = data?.minutes_remaining
   const marketOpen = minsLeft != null && minsLeft > 0
 
+  // Today's ET date in YYYY-MM-DD — same format the backend returns in data.date
+  const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })
+  // Stale: market is open but the briefing is dated before today (9:30–9:32 window)
+  const briefingIsStale = !!(data?.briefing && data.date && marketOpen && data.date < todayET)
+  // Pending: market is open but today's briefing hasn't been written yet (9:32–9:35 window)
+  const briefingPending = !!(data && !data.briefing && marketOpen)
+
   return (
     <Paper p="md">
       <Group justify="space-between" mb={expanded ? 'xs' : 0}>
@@ -57,11 +64,23 @@ export default function DailySummaryPanel() {
         <>
           {error && <Text c="red" size="sm" py="xs">Error: {error}</Text>}
           {!error && data && data.briefing && marketOpen && (
-            <Text size="sm" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>
-              {data.briefing}
+            <>
+              {briefingIsStale && (
+                <Text size="xs" c="orange" mb="xs">
+                  Showing {data.date} briefing — today's generating now.
+                </Text>
+              )}
+              <Text size="sm" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>
+                {data.briefing}
+              </Text>
+            </>
+          )}
+          {!error && briefingPending && (
+            <Text c="dimmed" size="sm" py="xs">
+              Today's briefing is generating — refresh in a few minutes.
             </Text>
           )}
-          {!error && data && (!marketOpen || !data.briefing) && (
+          {!error && data && !data.briefing && !briefingPending && (
             <Text c="dimmed" size="sm" py="xs">
               {isTodayTradingDay
                 ? 'Market closed — new briefing at market open (~9:35 AM ET).'
