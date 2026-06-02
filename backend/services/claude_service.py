@@ -82,6 +82,7 @@ When generating trade suggestions:
   * swing: overnight holds acceptable
   * holdings: partial trims and rebuys only
 - Calculate position sizes from available cash and shares owned
+- Use technical_indicators (20-day SMA) to assess trend direction for each ticker: above_sma = bullish bias, below_sma = bearish bias; price_vs_sma_pct shows how extended the move is
 - Only suggest reward/risk >= 1.5
 - Always state stop loss clearly
 - Never suggest selling below cost basis unless allow_loss is true

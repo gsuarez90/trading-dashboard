@@ -44,6 +44,7 @@ class DailyContext:
     scanner_results: list
     top_movers: list
     sentiment: list
+    technical_indicators: dict
     trades_today: list
     realized_pnl_today: float
     trade_count_today: int
@@ -167,6 +168,17 @@ def _cached_sentiment() -> list[dict] | None:
         return None
 
 
+def _cached_technicals() -> dict | None:
+    """Return DynamoDB-cached technical indicators if written on or after the last refresh date."""
+    try:
+        data, cached_at = dynamo_service.get_cache("technicals")
+        if data is None or not cached_at or not _cache_is_fresh(cached_at):
+            return None
+        return data
+    except Exception:
+        return None
+
+
 def _get_watchlist() -> list[str]:
     raw = os.environ.get("WATCHLIST", "")
     if raw:
@@ -261,7 +273,7 @@ def load_context(
 
     cash = float(portfolio.get("cash", 0.0))
 
-    # ── Round 2: enrich positions + sentiment in parallel ─────────────────────
+    # ── Round 2: enrich positions + sentiment + technicals in parallel ────────
     sentiment_tickers = list(
         {m["ticker"] for m in top_movers} | {p["ticker"] for p in portfolio.get("positions", [])}
     )
@@ -281,12 +293,26 @@ def load_context(
         except Exception:
             return []
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    def _fetch_technicals():
+        try:
+            cached = _cached_technicals()
+            if cached is not None:
+                return cached
+            mover_tickers = [m["ticker"] for m in top_movers]
+            if not mover_tickers:
+                return {}
+            return schwab_service.get_technical_indicators(mover_tickers)
+        except Exception:
+            return {}
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
         f_enriched = pool.submit(_enrich)
         f_sentiment = pool.submit(_fetch_sentiment)
+        f_technicals = pool.submit(_fetch_technicals)
 
     portfolio["positions"] = f_enriched.result()
     sentiment = f_sentiment.result()
+    technical_indicators = f_technicals.result()
 
     # ── Local computation (no I/O) ────────────────────────────────────────────
     realized_pnl_today = round(
@@ -314,6 +340,7 @@ def load_context(
         scanner_results=scanner_results,
         top_movers=top_movers,
         sentiment=sentiment,
+        technical_indicators=technical_indicators,
         trades_today=trades_today,
         realized_pnl_today=realized_pnl_today,
         trade_count_today=trade_count_today,

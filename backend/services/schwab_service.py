@@ -8,6 +8,7 @@ Lambda:     reads/writes token via Secrets Manager (wired up at Step 21)
 
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -282,3 +283,46 @@ def get_daily_bars(ticker: str, from_date: str, to_date: str) -> list[dict]:
             "vwap": None,
         })
     return result
+
+
+# ── Technical indicators ──────────────────────────────────────────────────────
+
+
+def get_technical_indicators(tickers: list[str]) -> dict[str, dict]:
+    """20-day SMA for each ticker using daily closing prices.
+
+    Fetches 30 calendar days of bars per ticker (guarantees >= 20 trading days),
+    then averages the last 20 closes. Runs all tickers in parallel.
+
+    Returns dict keyed by ticker: {sma_20, price_vs_sma_pct, above_sma}.
+    Skips tickers with fewer than 20 bars or any fetch error.
+    """
+    if not tickers:
+        return {}
+
+    from_date = (date.today() - timedelta(days=30)).strftime("%Y-%m-%d")
+    to_date = date.today().strftime("%Y-%m-%d")
+
+    def _compute(ticker: str) -> tuple[str, dict | None]:
+        try:
+            bars = get_daily_bars(ticker, from_date, to_date)
+            closes = [b["close"] for b in bars]
+            if len(closes) < 20:
+                return ticker, None
+            sma = round(sum(closes[-20:]) / 20, 2)
+            current = closes[-1]
+            pct = round((current - sma) / sma * 100, 2)
+            return ticker, {
+                "sma_20": sma,
+                "price_vs_sma_pct": pct,
+                "above_sma": current >= sma,
+            }
+        except Exception:
+            return ticker, None
+
+    results: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        for ticker, data in pool.map(_compute, tickers):
+            if data is not None:
+                results[ticker] = data
+    return results
