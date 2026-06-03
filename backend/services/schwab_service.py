@@ -33,6 +33,7 @@ def _get_client():
     app_secret = os.environ.get("SCHWAB_CLIENT_SECRET")
     if not api_key or not app_secret:
         from services.ssm_service import get_secret
+
         api_key = api_key or get_secret("/trading-app/schwab-client-id")
         app_secret = app_secret or get_secret("/trading-app/schwab-client-secret")
 
@@ -63,8 +64,7 @@ def _get_client():
 
     if not resolved.exists():
         raise RuntimeError(
-            f"Schwab token not found at {resolved}. "
-            "Run scripts/schwab_auth.py to authenticate."
+            f"Schwab token not found at {resolved}. " "Run scripts/schwab_auth.py to authenticate."
         )
 
     _client = schwab.auth.client_from_token_file(
@@ -173,18 +173,20 @@ def get_previous_day_movers(tickers: list[str], limit: int = 20) -> list[dict]:
         if float(last) < _MIN_PRICE or float(volume) < _MIN_VOLUME:
             continue
 
-        results.append({
-            "ticker": ticker,
-            "direction": "up" if float(change_pct) >= 0 else "down",
-            "price": round(float(last), 2),
-            "open": round(float(open_price), 2) if open_price is not None else None,
-            "high": round(float(high), 2) if high is not None else None,
-            "low": round(float(low), 2) if low is not None else None,
-            "prev_close": round(float(prev_close), 2) if prev_close is not None else None,
-            "change_pct": round(float(change_pct), 2),
-            "volume": int(volume),
-            "vwap": None,
-        })
+        results.append(
+            {
+                "ticker": ticker,
+                "direction": "up" if float(change_pct) >= 0 else "down",
+                "price": round(float(last), 2),
+                "open": round(float(open_price), 2) if open_price is not None else None,
+                "high": round(float(high), 2) if high is not None else None,
+                "low": round(float(low), 2) if low is not None else None,
+                "prev_close": round(float(prev_close), 2) if prev_close is not None else None,
+                "change_pct": round(float(change_pct), 2),
+                "volume": int(volume),
+                "vwap": None,
+            }
+        )
 
     results.sort(key=lambda x: abs(x["change_pct"]), reverse=True)
     return results[:limit]
@@ -206,14 +208,12 @@ def _fetch_today_status() -> dict:
     Kept separate so callers that only need is_open don't pay for the
     forward query that computes next_open_date.
     """
-    resp = _get_client().get_market_hours(
-        [schwab.client.Client.MarketHours.Market.EQUITY]
-    )
+    resp = _get_client().get_market_hours([schwab.client.Client.MarketHours.Market.EQUITY])
     resp.raise_for_status()
     equity = next(iter(resp.json().get("equity", {}).values()), {})
     return {
         "is_open": equity.get("isOpen", False),
-        "date":    equity.get("date"),
+        "date": equity.get("date"),
     }
 
 
@@ -224,31 +224,40 @@ def get_market_status() -> dict:
     confirms a trading day — typically 1 extra call (tomorrow), up to 4
     over a long weekend. Accounts for all NYSE holidays automatically.
     """
-    client    = _get_client()
-    today     = _fetch_today_status()
-    check     = datetime.now(tz=ET).date()
-    next_open = None
-    for _ in range(10):
-        check += timedelta(days=1)
-        r = client.get_market_hours(
-            [schwab.client.Client.MarketHours.Market.EQUITY], date=check
-        )
-        r.raise_for_status()
-        eq = next(iter(r.json().get("equity", {}).values()), {})
-        if eq.get("isOpen", False):
-            next_open = check.strftime("%Y-%m-%d")
-            break
+    client = _get_client()
+    today = _fetch_today_status()
+    now_et = datetime.now(tz=ET)
+
     # Schwab's isOpen means "is today a trading day", not "is the market open right now".
     # Cross-check with current ET time so after-hours returns is_open=False.
-    now_et = datetime.now(tz=ET)
     within_hours = (
         now_et.weekday() < 5
         and (now_et.hour > 9 or (now_et.hour == 9 and now_et.minute >= 30))
         and now_et.hour < 16
     )
+    # Pre-market on a trading day: the next open is today — skip the forward walk.
+    pre_market = now_et.weekday() < 5 and (
+        now_et.hour < 9 or (now_et.hour == 9 and now_et.minute < 30)
+    )
+    if today["is_open"] and pre_market:
+        next_open = now_et.date().strftime("%Y-%m-%d")
+    else:
+        check = now_et.date()
+        next_open = None
+        for _ in range(10):
+            check += timedelta(days=1)
+            r = client.get_market_hours(
+                [schwab.client.Client.MarketHours.Market.EQUITY], date=check
+            )
+            r.raise_for_status()
+            eq = next(iter(r.json().get("equity", {}).values()), {})
+            if eq.get("isOpen", False):
+                next_open = check.strftime("%Y-%m-%d")
+                break
+
     return {
-        "is_open":        today["is_open"] and within_hours,
-        "date":           today["date"],
+        "is_open": today["is_open"] and within_hours,
+        "date": today["date"],
         "next_open_date": next_open,
     }
 
@@ -273,15 +282,17 @@ def get_daily_bars(ticker: str, from_date: str, to_date: str) -> list[dict]:
     result = []
     for candle in data.get("candles", []):
         ts = datetime.fromtimestamp(candle["datetime"] / 1000, tz=ET)
-        result.append({
-            "date": ts.strftime("%Y-%m-%d"),
-            "open": round(float(candle["open"]), 2),
-            "high": round(float(candle["high"]), 2),
-            "low": round(float(candle["low"]), 2),
-            "close": round(float(candle["close"]), 2),
-            "volume": int(candle["volume"]),
-            "vwap": None,
-        })
+        result.append(
+            {
+                "date": ts.strftime("%Y-%m-%d"),
+                "open": round(float(candle["open"]), 2),
+                "high": round(float(candle["high"]), 2),
+                "low": round(float(candle["low"]), 2),
+                "close": round(float(candle["close"]), 2),
+                "volume": int(candle["volume"]),
+                "vwap": None,
+            }
+        )
     return result
 
 
