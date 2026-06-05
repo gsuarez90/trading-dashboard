@@ -7,6 +7,7 @@ Lambda:     reads/writes token via Secrets Manager (wired up at Step 21)
 """
 
 import json
+import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
@@ -15,6 +16,8 @@ from zoneinfo import ZoneInfo
 
 import boto3
 import schwab
+
+logger = logging.getLogger(__name__)
 
 ET = ZoneInfo("America/New_York")
 
@@ -138,6 +141,7 @@ def get_dynamic_watchlist(min_price: float = _MIN_PRICE) -> list[str]:
                     seen.add(symbol)
                     tickers.append(symbol)
         except Exception:
+            logger.exception("schwab get_movers failed for index %s", index)
             continue
 
     return tickers
@@ -329,6 +333,7 @@ def get_technical_indicators(tickers: list[str]) -> dict[str, dict]:
                 "above_sma": current >= sma,
             }
         except Exception:
+            logger.exception("schwab get_technical_indicators failed for ticker %s", ticker)
             return ticker, None
 
     results: dict[str, dict] = {}
