@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -7,6 +8,7 @@ ET = ZoneInfo("America/New_York")
 import finnhub
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
+logger = logging.getLogger(__name__)
 _analyzer = SentimentIntensityAnalyzer()
 
 
@@ -151,6 +153,7 @@ def score_batch_sentiment(tickers: list[str], days: int = 3) -> list[dict]:
         try:
             results.append(score_sentiment(ticker, days=days))
         except Exception:
+            logger.exception("finnhub score_sentiment failed for %s", ticker)
             results.append(
                 {
                     "ticker": ticker.upper(),

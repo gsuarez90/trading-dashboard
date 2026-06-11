@@ -332,6 +332,134 @@ Resources:
           Properties:
             Schedule: cron(0 22 * * ? *)
 
+  # ── Monitoring: metric filters + alarms ──────────────────────────────────────
+  #
+  # SNS topic (trading-dashboard-alerts) and SchwabTokenExpired alarm exist as
+  # manually-created resources outside CloudFormation. Metric filters below emit
+  # to the same TradingDashboard/SchwabTokenErrors metric that alarm watches, so
+  # the existing alarm covers all five Lambdas once these filters are in place.
+
+  # Schwab error filters — one per Lambda that calls Schwab.
+  # Pattern broadened from original "?token_invalid ?invalid_grant" to also capture
+  # the service-level failures logged after commit 5f5dbba.
+  SchwabErrorsFilterDailyRefresh:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${DailyRefreshFunction}'
+      FilterName: SchwabTokenErrors
+      FilterPattern: '?token_invalid ?invalid_grant ?"schwab get_dynamic_watchlist failed" ?"schwab get_technical_indicators failed"'
+      MetricTransformations:
+        - MetricName: SchwabTokenErrors
+          MetricNamespace: TradingDashboard
+          MetricValue: '1'
+          DefaultValue: 0
+
+  SchwabErrorsFilterPriceMonitor:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${PriceMonitorFunction}'
+      FilterName: SchwabTokenErrors
+      FilterPattern: '?token_invalid ?invalid_grant ?"schwab get_dynamic_watchlist failed" ?"schwab get_technical_indicators failed"'
+      MetricTransformations:
+        - MetricName: SchwabTokenErrors
+          MetricNamespace: TradingDashboard
+          MetricValue: '1'
+          DefaultValue: 0
+
+  SchwabErrorsFilterPublicApi:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${TradingDashboardFunction}'
+      FilterName: SchwabTokenErrors
+      FilterPattern: '?token_invalid ?invalid_grant ?"schwab get_dynamic_watchlist failed" ?"schwab get_technical_indicators failed"'
+      MetricTransformations:
+        - MetricName: SchwabTokenErrors
+          MetricNamespace: TradingDashboard
+          MetricValue: '1'
+          DefaultValue: 0
+
+  SchwabErrorsFilterPrivateApi:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${TradingDashboardPrivateFunction}'
+      FilterName: SchwabTokenErrors
+      FilterPattern: '?token_invalid ?invalid_grant ?"schwab get_dynamic_watchlist failed" ?"schwab get_technical_indicators failed"'
+      MetricTransformations:
+        - MetricName: SchwabTokenErrors
+          MetricNamespace: TradingDashboard
+          MetricValue: '1'
+          DefaultValue: 0
+
+  SchwabErrorsFilterLiveBriefing:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${DailyRefreshLiveBriefingFunction}'
+      FilterName: SchwabTokenErrors
+      FilterPattern: '?token_invalid ?invalid_grant ?"schwab get_dynamic_watchlist failed" ?"schwab get_technical_indicators failed"'
+      MetricTransformations:
+        - MetricName: SchwabTokenErrors
+          MetricNamespace: TradingDashboard
+          MetricValue: '1'
+          DefaultValue: 0
+
+  # Robinhood auth error filter + alarm — pattern from robin_stocks library log message
+  RobinhoodErrorsFilterPrivateApi:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${TradingDashboardPrivateFunction}'
+      FilterName: RobinhoodAuthErrors
+      FilterPattern: '"Authentication may be expired"'
+      MetricTransformations:
+        - MetricName: RobinhoodErrors
+          MetricNamespace: TradingDashboard
+          MetricValue: '1'
+          DefaultValue: 0
+
+  RobinhoodErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: RobinhoodAuthFailed
+      AlarmDescription: "Robinhood session expired on TradingDashboardPrivateFunction. Run: $env:RH_MFA_CODE='<code>' && python scripts/robinhood_reauth.py"
+      MetricName: RobinhoodErrors
+      Namespace: TradingDashboard
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Sub 'arn:aws:sns:${AWS::Region}:${AWS::AccountId}:trading-dashboard-alerts'
+
+  # Finnhub sentiment error filter + alarm (new — no existing alarm for this failure type)
+  FinnhubErrorsFilterDailyRefresh:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${DailyRefreshFunction}'
+      FilterName: FinnhubSentimentErrors
+      FilterPattern: '"finnhub score_sentiment failed"'
+      MetricTransformations:
+        - MetricName: FinnhubErrors
+          MetricNamespace: TradingDashboard
+          MetricValue: '1'
+          DefaultValue: 0
+
+  FinnhubErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: FinnhubSentimentFailed
+      AlarmDescription: Finnhub sentiment scoring failed in DailyRefreshFunction — scores will show as 0/neutral
+      MetricName: FinnhubErrors
+      Namespace: TradingDashboard
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Sub 'arn:aws:sns:${AWS::Region}:${AWS::AccountId}:trading-dashboard-alerts'
+
   # ── S3 buckets ────────────────────────────────────────────────────────────────
 
   PublicFrontendBucket:
