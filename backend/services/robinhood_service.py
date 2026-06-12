@@ -108,7 +108,8 @@ def get_portfolio() -> dict:
     _login()
 
     profile = rh.load_portfolio_profile()
-    cash = float(profile.get("withdrawable_amount") or profile.get("cash") or 0)
+    account = rh.load_account_profile()
+    cash = float(account.get("portfolio_cash") or 0)
     equity = float(profile.get("equity") or 0)
 
     raw_positions = rh.get_open_stock_positions()
@@ -146,5 +147,5 @@ def get_portfolio() -> dict:
 
 def get_cash() -> float:
     _login()
-    profile = rh.load_portfolio_profile()
-    return float(profile.get("withdrawable_amount") or profile.get("cash") or 0)
+    account = rh.load_account_profile()
+    return float(account.get("portfolio_cash") or 0)
