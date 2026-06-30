@@ -1,15 +1,23 @@
 import json
+import logging
 import os
 import re
 
 import anthropic
 
 from models.schemas import TradeSuggestionResponse
-from services import dynamo_service
-from services.context_loader import DailyContext
+from services import dynamo_service, finnhub_service, portfolio_factory, schwab_service
+from services.context_loader import (
+    DailyContext,
+    _cached_scanner_results,
+    _cached_sentiment,
+    _enrich_positions,
+    _get_watchlist,
+)
 from services.guardrail_service import GuardrailContext, check_all
 
 _MODEL = "claude-sonnet-4-6"
+logger = logging.getLogger(__name__)
 
 _GUARDRAIL_NAMES = [
     "daily_loss_limit",
@@ -42,7 +50,9 @@ Produce a concise morning briefing:
 5. Holdings overlapping with today's setups
 6. Honest assessment — if today looks poor for trading, say so
 
-If profit_mode is cash_intraday, assess average daily range viability.
+If profit_mode is cash_intraday, assess opening range setups via the 5-min technical_indicators:
+note which tickers have bounce_setup=true (price above ORH + EMA(3) > EMA(6) + above VWAP) as
+primary long candidates. Flag any ticker where price_below_orl=true as a structure to avoid.
 Never suggest selling below cost basis unless allow_loss is true.
 Plain text only, no markdown.\
 """
@@ -64,10 +74,14 @@ Plain text only, no markdown.\
 """
 
 _SUGGESTION_SYSTEM = """\
-You are a personal trading analyst assistant. Full daily context is in
-the payload including scanner results, intraday movers, sentiment,
-portfolio with cost basis, cash balance, trade history, realized P&L,
-guardrail status, and minutes remaining in session.
+You are a personal trading analyst assistant. You have tools to fetch live market data.
+Call them in this recommended sequence before generating suggestions:
+1. get_top_movers — identify today's active names
+2. get_technical_indicators — pass the mover tickers plus TQQQ and IONZ
+3. get_portfolio — current positions with enriched prices and P&L
+4. get_sentiment — pass the tickers you are seriously considering
+
+Only call get_quotes or get_scanner_results if you need additional data.
 
 Current settings:
 - Profit mode: {profit_mode}
@@ -82,7 +96,27 @@ When generating trade suggestions:
   * swing: overnight holds acceptable
   * holdings: partial trims and rebuys only
 - Calculate position sizes from available cash and shares owned
-- Use technical_indicators (20-day SMA) to assess trend direction for each ticker: above_sma = bullish bias, below_sma = bearish bias; price_vs_sma_pct shows how extended the move is
+- Use technical_indicators (5-min intraday) for setup qualification. Each ticker entry contains:
+    orh: Opening Range High — high of the 9:30-9:35am opening candle (key support level)
+    orl: Opening Range Low  — low of the 9:30-9:35am opening candle (breakdown level)
+    ema_3, ema_6: exponential moving averages across all 5-min closes today
+    vwap: cumulative volume-weighted average price since open
+    ema_3_above_ema_6: boolean — short-term momentum is up
+    price_above_vwap: boolean — day is net-bullish for this name
+    price_above_orh: boolean — price has broken above the opening range high
+    price_below_orl: boolean — price has broken below the opening range low (bearish)
+    bounce_setup: boolean — true when EMA(3) > EMA(6), price > VWAP, and price >= ORH
+- ONLY suggest LONG trades. No short setups.
+- The catalyst for every long is the opening 5-min candle. A valid long setup requires
+  bounce_setup=true: price broke above the ORH and is holding at or above it (ORH becomes
+  support), EMA momentum is positive, and the stock is above VWAP.
+- If price_below_orl is true, exclude that ticker entirely — bearish structure.
+- Entry: at or just above the ORH. Stop loss: just below the ORL.
+- Tickers where bounce_setup is false must be excluded from suggestions.
+- If no ticker meets all criteria, return an empty suggestions list.
+- TQQQ and IONZ are always included in technical_indicators regardless of scanner ranking.
+  Consider them as candidates if their bounce_setup qualifies, but deprioritize them when
+  a top mover presents a cleaner or higher-conviction setup.
 - Only suggest reward/risk >= 1.5
 - Always state stop loss clearly
 - Never suggest selling below cost basis unless allow_loss is true
@@ -142,6 +176,7 @@ def _get_client() -> anthropic.Anthropic:
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
             from services.ssm_service import get_secret
+
             api_key = get_secret("/trading-app/anthropic-key")
         _anthropic_client = anthropic.Anthropic(api_key=api_key)
     return _anthropic_client
@@ -162,6 +197,162 @@ def _extract_json(text: str) -> str:
     if match:
         return match.group(1).strip()
     return text
+
+
+def _build_tools() -> list[dict]:
+    return [
+        {
+            "name": "get_portfolio",
+            "description": (
+                "Fetch the current portfolio: cash balance, equity, and positions "
+                "with current prices and unrealized P&L."
+            ),
+            "input_schema": {"type": "object", "properties": {}, "required": []},
+        },
+        {
+            "name": "get_top_movers",
+            "description": (
+                "Fetch today's top intraday movers (up to 10) with price, change %, and volume. "
+                "Call this first — use the returned tickers as input to get_technical_indicators."
+            ),
+            "input_schema": {"type": "object", "properties": {}, "required": []},
+        },
+        {
+            "name": "get_scanner_results",
+            "description": "Fetch movers filtered to a minimum absolute change % threshold.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "min_change_pct": {
+                        "type": "number",
+                        "description": "Minimum absolute % change to include. Default 2.0.",
+                    }
+                },
+                "required": [],
+            },
+        },
+        {
+            "name": "get_sentiment",
+            "description": "Fetch Finnhub news sentiment scores for a list of tickers.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "tickers": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Ticker symbols to score.",
+                    }
+                },
+                "required": ["tickers"],
+            },
+        },
+        {
+            "name": "get_technical_indicators",
+            "description": (
+                "Fetch 5-min opening range indicators (ORH, ORL, EMA(3), EMA(6), VWAP, "
+                "bounce_setup) for a list of tickers. Always include TQQQ and IONZ. "
+                "Call get_top_movers first, then pass those tickers plus TQQQ and IONZ here."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "tickers": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Ticker symbols. Always include TQQQ and IONZ.",
+                    }
+                },
+                "required": ["tickers"],
+            },
+        },
+        {
+            "name": "get_quotes",
+            "description": "Fetch real-time last prices for specific tickers.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "tickers": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Ticker symbols.",
+                    }
+                },
+                "required": ["tickers"],
+            },
+        },
+    ]
+
+
+def _execute_tool(name: str, tool_input: dict) -> dict | list:
+    logger.info("Tool call: %s inputs=%s", name, tool_input)
+    if name == "get_portfolio":
+        portfolio = portfolio_factory.get_provider().get_portfolio()
+        portfolio["positions"] = _enrich_positions(portfolio.get("positions", []))
+        return portfolio
+    if name == "get_top_movers":
+        cached = _cached_scanner_results(min_change_pct=0)
+        if cached is not None:
+            return sorted(cached, key=lambda m: abs(m.get("change_pct", 0)), reverse=True)[:10]
+        return schwab_service.get_previous_day_movers(_get_watchlist(), limit=10)
+    if name == "get_scanner_results":
+        min_pct = float(tool_input.get("min_change_pct", 2.0))
+        cached = _cached_scanner_results(min_pct)
+        if cached is not None:
+            return cached
+        return schwab_service.get_scanner_results(_get_watchlist(), min_change_pct=min_pct)
+    if name == "get_sentiment":
+        tickers = tool_input.get("tickers", [])
+        cached = _cached_sentiment()
+        if cached is not None:
+            return [s for s in cached if s.get("ticker") in set(tickers)] if tickers else cached
+        return finnhub_service.score_batch_sentiment(tickers)
+    if name == "get_technical_indicators":
+        return schwab_service.get_technical_indicators(tool_input.get("tickers", []))
+    if name == "get_quotes":
+        return schwab_service.get_batch_quotes(tool_input.get("tickers", []))
+    raise ValueError(f"Unknown tool: {name}")
+
+
+def _agentic_call(system: str, payload: dict, max_iterations: int = 5) -> str:
+    """Run the Anthropic tool-use agentic loop.
+
+    Claude receives the seed payload, may emit tool_use blocks, and eventually
+    returns end_turn with the final text response.
+    """
+    messages = [{"role": "user", "content": json.dumps(payload, default=str)}]
+    tools = _build_tools()
+    for _ in range(max_iterations):
+        response = _get_client().messages.create(
+            model=_MODEL,
+            max_tokens=4096,
+            system=system,
+            tools=tools,
+            messages=messages,
+        )
+        if response.stop_reason == "end_turn":
+            for block in response.content:
+                if hasattr(block, "text"):
+                    return block.text
+            return ""
+        if response.stop_reason == "tool_use":
+            messages.append({"role": "assistant", "content": response.content})
+            results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    try:
+                        result = _execute_tool(block.name, block.input)
+                    except Exception as exc:
+                        logger.exception("Tool %s failed", block.name)
+                        result = {"error": str(exc)}
+                    results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": json.dumps(result, default=str),
+                        }
+                    )
+            messages.append({"role": "user", "content": results})
+    raise ValueError(f"Agentic loop exceeded {max_iterations} iterations without end_turn")
 
 
 def morning_briefing(ctx: DailyContext) -> str:
@@ -204,38 +395,29 @@ def chat(ctx: DailyContext, user_message: str) -> str:
 
 
 def suggest_trades(
-    ctx: DailyContext,
+    seed: dict,
     user_message: str,
     allow_loss: bool = False,
 ) -> TradeSuggestionResponse:
-    """Ask Claude for structured trade suggestions, then enforce guardrails server-side."""
+    """Ask Claude for structured trade suggestions via agentic tool use, then enforce guardrails."""
     system = _SUGGESTION_SYSTEM.format(
-        profit_mode=ctx.profit_mode,
-        trade_scope=ctx.trade_scope,
-        goal_dollars=int(ctx.daily_goal),
+        profit_mode=seed["profit_mode"],
+        trade_scope=seed["trade_scope"],
+        goal_dollars=int(seed["daily_goal"]),
     )
-    payload = {**ctx.to_dict(), "allow_loss": allow_loss, "user_message": user_message}
-    response = _get_client().messages.create(
-        model=_MODEL,
-        max_tokens=4096,
-        system=system,
-        messages=[{"role": "user", "content": json.dumps(payload, default=str)}],
-    )
-    raw = _extract_json(response.content[0].text)
+    payload = {**seed, "allow_loss": allow_loss, "user_message": user_message}
+    raw = _extract_json(_agentic_call(system, payload))
     if not raw:
-        raise ValueError(
-            f"Claude returned empty response. "
-            f"Stop reason: {response.stop_reason}. Usage: {response.usage}"
-        )
+        raise ValueError("Claude returned empty response from agentic loop")
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as e:
         raise ValueError(f"Claude returned invalid JSON: {e}\nRaw: {raw[:500]}")
 
     # Inject envelope fields in case Claude omitted them
-    parsed.setdefault("goal", ctx.daily_goal)
-    parsed.setdefault("profit_mode", ctx.profit_mode)
-    parsed.setdefault("trade_scope", ctx.trade_scope)
+    parsed.setdefault("goal", seed["daily_goal"])
+    parsed.setdefault("profit_mode", seed["profit_mode"])
+    parsed.setdefault("trade_scope", seed["trade_scope"])
     parsed.setdefault("suggestions", [])
     parsed.setdefault("risk_note", "")
     parsed.setdefault("market_conditions", "")
@@ -248,10 +430,10 @@ def suggest_trades(
 
     # Server-side guardrail check — same code path paper and live
     guardrail_ctx = GuardrailContext(
-        cash=ctx.cash,
-        realized_pnl_today=ctx.realized_pnl_today,
-        trade_count_today=ctx.trade_count_today,
-        trading_mode=ctx.trading_mode,
+        cash=seed["cash"],
+        realized_pnl_today=seed["realized_pnl_today"],
+        trade_count_today=seed["trade_count_today"],
+        trading_mode=seed["trading_mode"],
         allow_loss=allow_loss,
     )
     any_triggered = False

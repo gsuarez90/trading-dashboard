@@ -35,6 +35,10 @@ _DEFAULT_TICKERS = [
     "PLTR",
 ]
 
+# Always included in every context load regardless of dynamic watchlist ranking.
+# These won't appear in the Schwab movers API but we always want setup data for them.
+_PINNED_TICKERS = ["TQQQ", "IONZ"]
+
 
 @dataclass
 class DailyContext:
@@ -168,16 +172,6 @@ def _cached_sentiment() -> list[dict] | None:
         return None
 
 
-def _cached_technicals() -> dict | None:
-    """Return DynamoDB-cached technical indicators if written on or after the last refresh date."""
-    try:
-        data, cached_at = dynamo_service.get_cache("technicals")
-        if data is None or not cached_at or not _cache_is_fresh(cached_at):
-            return None
-        return data
-    except Exception:
-        return None
-
 
 def _get_watchlist() -> list[str]:
     raw = os.environ.get("WATCHLIST", "")
@@ -189,10 +183,84 @@ def _get_watchlist() -> list[str]:
         try:
             dynamic = schwab_service.get_dynamic_watchlist()
             if dynamic:
-                return dynamic
+                pinned = [t for t in _PINNED_TICKERS if t not in set(dynamic)]
+                return dynamic + pinned
         except Exception:
             pass
-    return _DEFAULT_TICKERS
+    pinned = [t for t in _PINNED_TICKERS if t not in set(_DEFAULT_TICKERS)]
+    return _DEFAULT_TICKERS + pinned
+
+
+def build_seed_context() -> dict:
+    """Minimal context for the agentic suggest_trades path.
+
+    Fetches only cheap data: env vars, DynamoDB (trades + guardrail events), and portfolio cash.
+    Market data (movers, sentiment, technicals, positions) is fetched on-demand via Claude tools.
+    """
+    now_et = datetime.now(tz=ET)
+    today = now_et.strftime("%Y-%m-%d")
+
+    trading_mode = os.environ.get("TRADING_MODE", "paper")
+    profit_mode = os.environ.get("PROFIT_MODE", "cash_intraday")
+    trade_scope = os.environ.get("TRADE_SCOPE", "open")
+    daily_goal = float(os.environ.get("DAILY_GOAL", 100))
+
+    def _fetch_cash():
+        try:
+            return float(portfolio_factory.get_provider().get_portfolio().get("cash", 0.0))
+        except Exception:
+            return 0.0
+
+    def _fetch_trades():
+        try:
+            return dynamo_service.get_trades_by_date(today)
+        except Exception:
+            return []
+
+    def _fetch_guardrail_events():
+        try:
+            return dynamo_service.get_guardrail_events_by_date(today)
+        except Exception:
+            return []
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        f_cash = pool.submit(_fetch_cash)
+        f_trades = pool.submit(_fetch_trades)
+        f_events = pool.submit(_fetch_guardrail_events)
+
+    cash = f_cash.result()
+    trades_today = f_trades.result()
+    guardrail_events = f_events.result()
+
+    realized_pnl_today = round(
+        sum(t.get("realized_pnl", 0) or 0 for t in trades_today if t.get("status") == "closed"),
+        2,
+    )
+    trade_count_today = sum(
+        1 for t in trades_today if t.get("status") in {"open", "closed", "pending"}
+    )
+    guardrail_ctx = GuardrailContext(
+        cash=cash,
+        realized_pnl_today=realized_pnl_today,
+        trade_count_today=trade_count_today,
+        trading_mode=trading_mode,
+        now=now_et,
+    )
+
+    return {
+        "date": today,
+        "cash": cash,
+        "trading_mode": trading_mode,
+        "profit_mode": profit_mode,
+        "trade_scope": trade_scope,
+        "daily_goal": daily_goal,
+        "minutes_remaining": _minutes_remaining(now_et),
+        "guardrail_status": get_status(guardrail_ctx),
+        "trades_today": trades_today,
+        "guardrail_events": guardrail_events,
+        "realized_pnl_today": realized_pnl_today,
+        "trade_count_today": trade_count_today,
+    }
 
 
 def load_context(
@@ -295,13 +363,12 @@ def load_context(
 
     def _fetch_technicals():
         try:
-            cached = _cached_technicals()
-            if cached is not None:
-                return cached
             mover_tickers = [m["ticker"] for m in top_movers]
-            if not mover_tickers:
+            # Always include pinned tickers even if they didn't rank in top movers
+            all_tickers = list(dict.fromkeys(mover_tickers + _PINNED_TICKERS))
+            if not all_tickers:
                 return {}
-            return schwab_service.get_technical_indicators(mover_tickers)
+            return schwab_service.get_technical_indicators(all_tickers)
         except Exception:
             return {}
 

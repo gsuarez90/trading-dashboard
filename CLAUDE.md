@@ -107,6 +107,8 @@ Co-Authored-By: gsuarez90 <gsuarez90@users.noreply.github.com>
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 ```
 
+Maximum supported commit message length is **965 bytes** — keep the full message (body + trailers) under this limit.
+
 ---
 
 ## Key Constraints

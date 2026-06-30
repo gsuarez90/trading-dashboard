@@ -76,7 +76,7 @@ def _make_ctx(**overrides) -> GuardrailContext:
 def guardrail_env(monkeypatch):
     monkeypatch.setenv("DAILY_LOSS_LIMIT", "200")
     monkeypatch.setenv("MAX_POSITION_SIZE_PCT", "20")
-    monkeypatch.setenv("DAILY_TRADE_LIMIT", "3")
+    monkeypatch.setenv("DAILY_TRADE_LIMIT", "2")
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
@@ -242,7 +242,7 @@ def test_intraday_suggestion_blocked_under_60_min_remaining():
 
 
 def test_daily_trade_limit_blocks_at_threshold():
-    ctx = _make_ctx(trade_count_today=3)  # at the limit of 3
+    ctx = _make_ctx(trade_count_today=2)  # at the limit of 3
     result = check_all(_make_valid_trade(), ctx)
     assert not result.allowed
     assert "daily_trade_limit" in result.triggered

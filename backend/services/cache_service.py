@@ -104,13 +104,6 @@ def get_cached_live_briefing() -> dict | None:
     return None
 
 
-def get_cached_technicals() -> dict | None:
-    """Return cached technical indicators {ticker: {sma_20, price_vs_sma_pct, above_sma}} if fresh, else None."""
-    data, cached_at = dynamo_service.get_cache("technicals")
-    if data is not None and _cache_is_fresh(cached_at):
-        return data
-    return None
-
 
 def store_live_briefing(briefing_text: str, date: str) -> None:
     """Write live briefing to DynamoDB cache."""
@@ -164,18 +157,6 @@ def run_daily_refresh() -> dict:
         errors.append(f"sentiment: {e}")
         sentiment_count = 0
 
-    # Technical indicators — 20-day SMA for top movers
-    try:
-        indicator_tickers = [m["ticker"] for m in movers[:20]] if scanner_count else tickers[:20]
-        technicals = schwab_service.get_technical_indicators(indicator_tickers)
-        dynamo_service.put_cache("technicals", technicals)
-        technicals_count = len(technicals)
-        logger.info("Technicals cached %d tickers", technicals_count)
-    except Exception as e:
-        logger.error("Technicals failed: %s", e, exc_info=True)
-        errors.append(f"technicals: {e}")
-        technicals_count = 0
-
     # Morning briefing — generated once, cached for the day
     try:
         ctx = load_context()
@@ -191,14 +172,13 @@ def run_daily_refresh() -> dict:
     if errors:
         logger.warning("Daily refresh completed with errors: %s", errors)
     else:
-        logger.info("Daily refresh complete — scanner=%d sentiment=%d technicals=%d briefing=%s",
-                    scanner_count, sentiment_count, technicals_count, briefing_ok)
+        logger.info("Daily refresh complete — scanner=%d sentiment=%d briefing=%s",
+                    scanner_count, sentiment_count, briefing_ok)
 
     return {
         "refreshed_at": datetime.now(tz=ET).isoformat(),
         "scanner_count": scanner_count,
         "sentiment_count": sentiment_count,
-        "technicals_count": technicals_count,
         "briefing_cached": briefing_ok,
         "errors": errors,
     }

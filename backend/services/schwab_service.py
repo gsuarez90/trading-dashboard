@@ -304,33 +304,92 @@ def get_daily_bars(ticker: str, from_date: str, to_date: str) -> list[dict]:
 
 
 def get_technical_indicators(tickers: list[str]) -> dict[str, dict]:
-    """20-day SMA for each ticker using daily closing prices.
+    """5-min intraday indicators using the opening range candle as the catalyst.
 
-    Fetches 30 calendar days of bars per ticker (guarantees >= 20 trading days),
-    then averages the last 20 closes. Runs all tickers in parallel.
+    Fetches today's 5-min bars for each ticker via Schwab price history.
+    candles[0] = the 9:30-9:35am opening candle — its high/low are the
+    Opening Range High (ORH) and Opening Range Low (ORL) for the day.
 
-    Returns dict keyed by ticker: {sma_20, price_vs_sma_pct, above_sma}.
-    Skips tickers with fewer than 20 bars or any fetch error.
+    EMA(3) and EMA(6) are computed across all 5-min closes so far today.
+    VWAP is cumulative from open to now.
+
+    Runs all tickers in parallel. Skips tickers with fewer than 6 bars
+    (not enough history for EMA(6) to be meaningful).
+
+    Returns dict keyed by ticker:
+    {
+        orh, orl,                        # opening range high/low (9:30-9:35am candle)
+        ema_3, ema_6, vwap,
+        ema_3_above_ema_6, price_above_vwap,
+        price_above_orh, price_below_orl,
+        current_price, bounce_setup
+    }
     """
     if not tickers:
         return {}
 
-    from_date = (date.today() - timedelta(days=30)).strftime("%Y-%m-%d")
-    to_date = date.today().strftime("%Y-%m-%d")
+    today_et = datetime.now(tz=ET)
+    start = today_et.replace(hour=9, minute=30, second=0, microsecond=0)
+    end = today_et
 
     def _compute(ticker: str) -> tuple[str, dict | None]:
         try:
-            bars = get_daily_bars(ticker, from_date, to_date)
-            closes = [b["close"] for b in bars]
-            if len(closes) < 20:
+            resp = _get_client().get_price_history_every_five_minutes(
+                ticker,
+                start_datetime=start,
+                end_datetime=end,
+                need_previous_close=False,
+            )
+            resp.raise_for_status()
+            candles = resp.json().get("candles", [])
+            if len(candles) < 6:
                 return ticker, None
-            sma = round(sum(closes[-20:]) / 20, 2)
+
+            closes = [float(c["close"]) for c in candles]
+            highs  = [float(c["high"])  for c in candles]
+            lows   = [float(c["low"])   for c in candles]
+            vols   = [float(c["volume"]) for c in candles]
+
+            # Opening range levels — always the first 5-min candle of the day
+            orh = round(highs[0], 2)
+            orl = round(lows[0], 2)
+
+            # EMA — seed with SMA of first `period` candles, then smooth forward
+            def _ema(period: int) -> float:
+                sma = sum(closes[:period]) / period
+                k = 2 / (period + 1)
+                val = sma
+                for price in closes[period:]:
+                    val = price * k + val * (1 - k)
+                return round(val, 4)
+
+            # VWAP: cumulative from open — sum(typical_price * volume) / sum(volume)
+            total_vol = sum(vols)
+            vwap = round(
+                sum((highs[i] + lows[i] + closes[i]) / 3 * vols[i] for i in range(len(candles)))
+                / total_vol, 4
+            ) if total_vol > 0 else None
+
+            ema3 = _ema(3)
+            ema6 = _ema(6)
             current = closes[-1]
-            pct = round((current - sma) / sma * 100, 2)
+
             return ticker, {
-                "sma_20": sma,
-                "price_vs_sma_pct": pct,
-                "above_sma": current >= sma,
+                "orh":               orh,
+                "orl":               orl,
+                "ema_3":             ema3,
+                "ema_6":             ema6,
+                "vwap":              vwap,
+                "current_price":     round(current, 2),
+                "ema_3_above_ema_6": ema3 > ema6,
+                "price_above_vwap":  vwap is not None and current > vwap,
+                "price_above_orh":   current > orh,
+                "price_below_orl":   current < orl,
+                "bounce_setup": (
+                    ema3 > ema6
+                    and vwap is not None and current > vwap
+                    and current >= orh
+                ),
             }
         except Exception:
             logger.exception("schwab get_technical_indicators failed for ticker %s", ticker)

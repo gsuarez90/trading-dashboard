@@ -45,6 +45,9 @@ ai-trading-dashboard-kickoff-final-v5.md
 two-lambda-implementation.md
 portfolio-mode-separation.md
 bottlenecks.md
+changes6.30.26.md
+multi-agent-data-upgrade.md
+scripts/test_agentic_suggest.py
 
 # Misc
 *.png

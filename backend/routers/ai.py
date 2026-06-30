@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 from models.schemas import TradeSuggestionResponse
 from services import cache_service, claude_service
-from services.context_loader import load_context
+from services.context_loader import build_seed_context, load_context
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
@@ -66,7 +66,7 @@ def chat(request: ChatRequest):
 @router.post("/suggest-trades", response_model=TradeSuggestionResponse)
 def suggest_trades(request: SuggestTradesRequest):
     try:
-        ctx = load_context()
-        return claude_service.suggest_trades(ctx, request.message, request.allow_loss)
+        seed = build_seed_context()
+        return claude_service.suggest_trades(seed, request.message, request.allow_loss)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Trade suggestion failed: {e}")
