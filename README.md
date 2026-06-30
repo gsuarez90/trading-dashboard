@@ -93,8 +93,8 @@ myAITradingApp/
 │   │
 │   ├── services/                     # Business logic — routers call these, never the reverse
 │   │   ├── cache_service.py          # DynamoDB cache reads + all 3 Lambda scheduled job implementations
-│   │   ├── claude_service.py         # Anthropic API calls — morning_briefing, chat, suggest_trades
-│   │   ├── context_loader.py         # Assembles DailyContext — the full market snapshot sent to Claude
+│   │   ├── claude_service.py         # Anthropic API — morning_briefing, chat, suggest_trades (agentic tool-use loop)
+│   │   ├── context_loader.py         # DailyContext (briefing/chat) + build_seed_context() (suggest_trades agentic path)
 │   │   ├── dynamo_service.py         # All DynamoDB reads/writes — trades, cache, guardrail events
 │   │   ├── finnhub_service.py        # Finnhub news fetch + VADER sentiment scoring
 │   │   ├── guardrail_service.py      # 8 guardrail checks + status dashboard + kill switch
@@ -103,7 +103,7 @@ myAITradingApp/
 │   │   ├── paper_trading_service.py  # open_trade, close_trade, get_daily_summary
 │   │   ├── portfolio_factory.py      # Selects robinhood_service or synthetic_portfolio by PORTFOLIO_MODE
 │   │   ├── robinhood_service.py      # Live portfolio data from Robinhood (PORTFOLIO_MODE=live)
-│   │   ├── schwab_service.py         # Schwab OAuth client — quotes, movers, price history
+│   │   ├── schwab_service.py         # Schwab OAuth client — quotes, movers, 5-min opening range indicators
 │   │   ├── ssm_service.py            # Runtime SSM SecureString fetch — API keys cached per Lambda container
 │   │   └── synthetic_portfolio.py    # Fake portfolio data for public demo (no credentials needed)
 │   │
@@ -339,22 +339,66 @@ Frontend:    ChatPanel.jsx
              {message: "Suggest trades based on today's context.", allow_loss: false}
 
 Backend:     routers/ai.py → suggest_trades(request)
-               └─ context_loader.load_context() — same full snapshot as chat
-               └─ claude_service.suggest_trades(ctx, message, allow_loss)
-                    └─ Anthropic API call with structured output schema
-                    └─ Claude returns list of TradeSetup objects:
-                         ticker, direction (long/short), trade_type
-                         entry_price, target_price, stop_loss, shares
-                         expected_gain, max_loss, reward_risk_ratio (min 1.5)
-                         confidence, rationale, setup_type
-                         robinhood_instructions (plain English order steps)
+               └─ context_loader.build_seed_context()
+                    Cheap parallel fetch (no market API calls):
+                    - portfolio cash (Robinhood/synthetic — one call)
+                    - trades_today + guardrail_events (DynamoDB)
+                    - env vars: trading_mode, profit_mode, trade_scope, daily_goal
+                    - guardrail_status (computed from the above)
+                    - minutes_remaining
+
+               └─ claude_service.suggest_trades(seed, message, allow_loss)
+                    └─ _agentic_call(system, payload, max_iterations=5)
+                         │
+                         │  Iteration 1 — Claude calls tools to gather market data:
+                         ├─ get_top_movers()
+                         │    └─ DDB cache hit → live Schwab quotes for cached tickers
+                         │    └─ cache miss  → schwab_service.get_previous_day_movers()
+                         │    └─ Returns list of today's top movers (price, change %, vol)
+                         │
+                         │  Iteration 2 — Claude calls with specific tickers:
+                         ├─ get_technical_indicators(tickers=[...movers..., "TQQQ", "IONZ"])
+                         │    └─ schwab_service.get_technical_indicators(tickers)
+                         │         └─ Fetches 5-min bars for each ticker
+                         │         └─ candles[0] = opening 9:30-9:35am candle
+                         │         └─ Computes per ticker:
+                         │              orh: opening range high (high of first candle)
+                         │              orl: opening range low  (low of first candle)
+                         │              ema_3, ema_6: EMAs across all 5-min closes
+                         │              vwap: cumulative volume-weighted avg price
+                         │              bounce_setup: true when EMA(3)>EMA(6) AND
+                         │                            price>VWAP AND price>=ORH
+                         │
+                         ├─ get_portfolio()
+                         │    └─ portfolio_factory → positions enriched with current prices
+                         │
+                         ├─ get_sentiment(tickers=[...candidates...])  [optional]
+                         │    └─ DDB cache hit or finnhub_service.score_batch_sentiment()
+                         │
+                         │  Final iteration — Claude produces JSON:
+                         └─ stop_reason="end_turn" → returns structured JSON string
+
+                    └─ _extract_json() + json.loads()
+                    └─ TradeSuggestionResponse.model_validate(parsed)
+                    └─ Server-side guardrail checks on every suggestion:
+                         guardrail_service.check_all(trade, GuardrailContext)
+                    └─ If recommended trade fails guardrails:
+                         dynamo_service.log_guardrail_event(...)
+                         suggestion.recommended = None
+
+Suggestion   Only LONG trades suggested. Valid setup requires bounce_setup=true —
+strategy:    price broke above the ORH (Opening Range High) and is holding there
+             with EMA(3) > EMA(6) and price above VWAP. Entry at/above ORH; stop
+             just below ORL. Tickers where price_below_orl=true are excluded.
+             TQQQ and IONZ always included regardless of scanner ranking.
+             Minimum reward/risk ratio: 1.5. Daily goal: $400.
 
 Response:    Each suggestion as a card showing all trade parameters
              Recommended trade highlighted; R/R and confidence displayed per card
 Error path:  "Trade suggestion failed: <reason>" error message
 ```
 
-Suggestions are structured Pydantic-validated data, not free text. Every suggestion includes plain-English Robinhood instructions because the app never places orders directly.
+Suggestions are structured Pydantic-validated data, not free text. Claude fetches data on-demand via tools (agentic loop) rather than receiving a pre-built context blob — it calls `get_top_movers` first, then decides which tickers warrant deeper indicator analysis. Every suggestion includes plain-English Robinhood instructions because the app never places orders directly.
 
 ---
 
@@ -414,6 +458,7 @@ Response:    4 status cards:
                Trades today (X of 3 limit)
              Events log: ticker + rules triggered per event (e.g. "NVDA — market_hours_lock")
              Red badge on panel header showing event count
+             Trades today card shows X of 2 daily limit
 
 Kill switch (two-step confirm):
   "Activate Kill Switch" → "Confirm — Close All" + "Cancel"
@@ -518,6 +563,9 @@ Lambda 1:    main.py → refresh_handler()  [DailyRefreshFunction]
                     └─ context_loader.load_context()
                     └─ claude_service.morning_briefing(ctx) — Anthropic API call
                          └─ dynamo_service.put_cache("briefing", {briefing, date})
+               Note: intraday 5-min indicators (ORH/ORL/EMA/VWAP) are NOT cached here —
+               they expire within minutes and are fetched live via the suggest_trades
+               agentic tool call instead.
 
 Lambda 2:    main.py → refresh_live_briefing_handler()  [DailyRefreshLiveBriefingFunction]
                PORTFOLIO_MODE=live — Schwab + Robinhood access
@@ -718,15 +766,15 @@ Required GitHub repository secrets: `AWS_DEPLOY_ROLE_ARN`, `PUBLIC_API_URL`, `PR
 
 ## Guardrails Reference
 
-All 8 guardrails run through `guardrail_service.check_all()` in `backend/services/guardrail_service.py`. Same checks for paper and live.
+All 8 guardrails run through `guardrail_service.check_all()` in `backend/services/guardrail_service.py`. Same checks for paper and live. Current config: daily goal $400, max 2 trades/day, max position size 27% of cash.
 
 | Guardrail | What it checks | Triggered when |
 |-----------|---------------|----------------|
 | `daily_loss_limit` | Total realized P&L today | Losses reach `DAILY_LOSS_LIMIT` ($200 default) |
-| `position_size_cap` | Trade value vs available cash | Position exceeds `MAX_POSITION_SIZE_PCT` (20% default) of cash |
+| `position_size_cap` | Trade value vs available cash | Position exceeds `MAX_POSITION_SIZE_PCT` (27% default) of cash |
 | `cost_basis_protection` | Entry price vs avg cost on held positions | Entry is below your cost basis — would realize a loss on a winner. Override with `allow_loss=true` |
 | `reward_risk_minimum` | Target gain ÷ max loss | Ratio is below 1.5 |
-| `daily_trade_limit` | Trades placed today | `DAILY_TRADE_LIMIT` (3 default) already reached. Bypassed when `PDT_EXEMPT=true` in SSM (for accounts above the $25k PDT threshold) |
+| `daily_trade_limit` | Trades placed today | `DAILY_TRADE_LIMIT` (2 default) already reached. Bypassed when `PDT_EXEMPT=true` in SSM (for accounts above the $25k PDT threshold) |
 | `market_hours_lock` | Current time (ET) | Outside 9:30am–4:00pm ET, Monday–Friday |
 | `intraday_60min_cutoff` | Current time for intraday trades | After 3:00pm ET — less than 60 minutes left in session |
 | `buying_power_check` | Trade value vs cash balance | Insufficient cash to cover the full position |
@@ -753,6 +801,26 @@ All 8 guardrails run through `guardrail_service.check_all()` in `backend/service
 **`.env.example`** — Documents every required variable with empty values. Safe to commit. Reference for what needs to go into SSM/Secrets Manager before first AWS deploy.
 
 Non-secret config (PORTFOLIO_MODE, TRADING_MODE, DAILY_GOAL, etc.) uses plain SSM parameters resolved at deploy time — baked into Lambda environment variables. API key secrets (Anthropic, Finnhub, Schwab client ID/secret) use SSM SecureString fetched at **runtime** by `ssm_service.get_secret()` on Lambda cold start, then cached for the container lifetime. Secrets Manager values (Schwab token, Robinhood credentials) are also fetched at runtime — always the current version, which is why Schwab token auto-rotation works transparently.
+
+---
+
+## Opening Range Strategy
+
+Claude's trade suggestions are built around the 5-minute opening range — the price band established in the first candle of the session (9:30–9:35am ET). `schwab_service.get_technical_indicators()` fetches intraday 5-min bars for each candidate ticker and computes:
+
+| Field | Meaning |
+|-------|---------|
+| `orh` | Opening Range High — high of the 9:30–9:35am candle |
+| `orl` | Opening Range Low — low of the 9:30–9:35am candle |
+| `ema_3` | EMA across all 5-min closes today (short-term momentum) |
+| `ema_6` | EMA across all 5-min closes today (medium-term trend) |
+| `vwap` | Cumulative volume-weighted average price since open |
+| `bounce_setup` | `true` when EMA(3) > EMA(6) AND price > VWAP AND price ≥ ORH |
+| `price_below_orl` | `true` when price has broken below the opening range low (bearish — skip) |
+
+A valid long setup requires `bounce_setup=true`: the stock broke above its ORH and is holding there with bullish EMA momentum and net-positive buying pressure (above VWAP). Entry is at or just above the ORH; the ORH becomes support. Stop loss sits just below the ORL — if price retreats there, the opening structure has failed.
+
+`TQQQ` and `IONZ` are always included in the indicator fetch regardless of where they rank on the day's scanner, because they won't appear in Schwab's index-component mover API but are always in scope as candidates.
 
 ---
 
