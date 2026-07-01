@@ -375,11 +375,15 @@ def _agentic_call(
     Claude receives the seed payload and may emit tool_use blocks. If finish_tool is
     set, Claude must deliver its final answer by calling that tool — its input is
     returned directly as a dict, guaranteeing schema-valid output instead of relying
-    on Claude to format a plain-text response correctly. If Claude answers with plain
-    text instead (stop_reason="end_turn") while finish_tool is set, it is nudged to
-    call the tool instead. Without finish_tool, the final end_turn text is returned.
+    on Claude to format a plain-text response correctly. tool_choice is forced to
+    "any" in this case so Claude cannot spend a turn writing plain text instead of
+    calling a tool — that costs a full extra round trip we can't afford under the
+    Lambda timeout. The end_turn nudge below is a defensive fallback in case Claude
+    still stops without calling anything. Without finish_tool, the final end_turn
+    text is returned normally.
     """
     messages = [{"role": "user", "content": json.dumps(payload, default=str)}]
+    extra_kwargs = {"tool_choice": {"type": "any"}} if finish_tool else {}
     for _ in range(max_iterations):
         response = _get_client().messages.create(
             model=_MODEL,
@@ -387,6 +391,7 @@ def _agentic_call(
             system=system,
             tools=tools,
             messages=messages,
+            **extra_kwargs,
         )
         if response.stop_reason == "tool_use":
             messages.append({"role": "assistant", "content": response.content})

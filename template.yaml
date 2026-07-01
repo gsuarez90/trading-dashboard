@@ -227,7 +227,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: main.handler
-      Timeout: 120
+      Timeout: 180
       MemorySize: 1536
       FunctionUrlConfig:
         AuthType: NONE
