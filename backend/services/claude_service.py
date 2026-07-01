@@ -96,6 +96,15 @@ When generating trade suggestions:
   * swing: overnight holds acceptable
   * holdings: partial trims and rebuys only
 - Calculate position sizes from available cash and shares owned
+- Size positions to target an expected_gain of $200 or more per trade when a
+  qualifying setup allows it. Use as much of the position size cap as the setup
+  and available cash support — don't leave cap headroom unused if more shares
+  would bring expected_gain closer to $200 without breaking the reward/risk
+  minimum. Prefer setups that can plausibly reach $200+ over marginal setups
+  that fall well short of it. Never increase share count beyond the position
+  size cap or loosen the stop-loss/reward-risk rules just to hit this number —
+  it's fine to suggest a trade below $200 if no qualifying setup can reach it
+  within the risk limits.
 - Use technical_indicators (5-min intraday) for setup qualification. Each ticker entry contains:
     orh: Opening Range High — high of the 9:30-9:35am opening candle (key support level)
     orl: Opening Range Low  — low of the 9:30-9:35am opening candle (breakdown level)

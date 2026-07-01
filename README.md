@@ -768,12 +768,12 @@ Required GitHub repository secrets: `AWS_DEPLOY_ROLE_ARN`, `PUBLIC_API_URL`, `PR
 
 ## Guardrails Reference
 
-All 8 guardrails run through `guardrail_service.check_all()` in `backend/services/guardrail_service.py`. Same checks for paper and live. Current config: daily goal $400, max 2 trades/day, max position size 27% of cash.
+All 8 guardrails run through `guardrail_service.check_all()` in `backend/services/guardrail_service.py`. Same checks for paper and live. Current config: daily goal $400, max 2 trades/day, max position size 40% of cash.
 
 | Guardrail | What it checks | Triggered when |
 |-----------|---------------|----------------|
 | `daily_loss_limit` | Total realized P&L today | Losses reach `DAILY_LOSS_LIMIT` ($200 default) |
-| `position_size_cap` | Trade value vs available cash | Position exceeds `MAX_POSITION_SIZE_PCT` (27% default) of cash |
+| `position_size_cap` | Trade value vs available cash | Position exceeds `MAX_POSITION_SIZE_PCT` (40% default) of cash |
 | `cost_basis_protection` | Entry price vs avg cost on held positions | Entry is below your cost basis — would realize a loss on a winner. Override with `allow_loss=true` |
 | `reward_risk_minimum` | Target gain ÷ max loss | Ratio is below 1.5 |
 | `daily_trade_limit` | Trades placed today | `DAILY_TRADE_LIMIT` (2 default) already reached. Bypassed when `PDT_EXEMPT=true` in SSM (for accounts above the $25k PDT threshold) |
