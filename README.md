@@ -348,7 +348,7 @@ Backend:     routers/ai.py → suggest_trades(request)
                     - minutes_remaining
 
                └─ claude_service.suggest_trades(seed, message, allow_loss)
-                    └─ _agentic_call(system, payload, max_iterations=5)
+                    └─ _agentic_call(system, payload, tools, finish_tool="submit_trade_suggestions")
                          │
                          │  Iteration 1 — Claude calls tools to gather market data:
                          ├─ get_top_movers()
@@ -375,10 +375,12 @@ Backend:     routers/ai.py → suggest_trades(request)
                          ├─ get_sentiment(tickers=[...candidates...])  [optional]
                          │    └─ DDB cache hit or finnhub_service.score_batch_sentiment()
                          │
-                         │  Final iteration — Claude produces JSON:
-                         └─ stop_reason="end_turn" → returns structured JSON string
+                         │  Final step — Claude must call the finish tool to answer:
+                         └─ tool_use "submit_trade_suggestions" → its input IS the parsed dict
+                              (schema-enforced by the tool's input_schema — Claude cannot
+                              answer with free text; if it tries, it is nudged to call the
+                              tool instead and the loop continues)
 
-                    └─ _extract_json() + json.loads()
                     └─ TradeSuggestionResponse.model_validate(parsed)
                     └─ Server-side guardrail checks on every suggestion:
                          guardrail_service.check_all(trade, GuardrailContext)

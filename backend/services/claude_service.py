@@ -126,45 +126,9 @@ When generating trade suggestions:
 
 Never force a trade to hit the goal by taking disproportionate risk.
 
-Return ONLY a single valid JSON object with this exact structure (no markdown, no explanation).
-Every TradeSetup must include ALL fields below with EXACT field names:
-
-{{
-  "goal": <float>,
-  "profit_mode": <string>,
-  "trade_scope": <string>,
-  "risk_note": <string>,
-  "market_conditions": <string>,
-  "intraday_viability": <string or null>,
-  "guardrails_checked": [],
-  "any_guardrail_triggered": false,
-  "recommended": <TradeSetup or null>,
-  "suggestions": [
-    {{
-      "ticker": <string>,
-      "direction": <"long" or "short">,
-      "trade_type": <"intraday_cash" or "swing" or "partial_trim">,
-      "profit_mode": <string>,
-      "entry_price": <float>,
-      "target_price": <float>,
-      "stop_loss": <float>,
-      "shares": <int>,
-      "expected_gain": <float>,
-      "max_loss": <float>,
-      "reward_risk_ratio": <float>,
-      "confidence": <"high" or "medium" or "low">,
-      "rationale": <string>,
-      "setup_type": <string>,
-      "uses_existing_holding": <bool>,
-      "cost_basis": <float or null>,
-      "current_unrealized_pnl": <float or null>,
-      "avg_daily_range_pct": <float or null>,
-      "robinhood_instructions": <string — exact plain english steps including 3:45pm alarm>,
-      "ml_probability": null,
-      "ml_calibration_note": null
-    }}
-  ]
-}}\
+When your analysis is complete, call the submit_trade_suggestions tool exactly once
+with your full answer. That tool call is the ONLY way to deliver your answer — never
+respond with plain text or markdown instead of calling it.\
 """
 
 _anthropic_client: anthropic.Anthropic | None = None
@@ -283,6 +247,92 @@ def _build_tools() -> list[dict]:
     ]
 
 
+_TRADE_SETUP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "ticker": {"type": "string"},
+        "direction": {"type": "string", "enum": ["long", "short"]},
+        "trade_type": {"type": "string", "enum": ["intraday_cash", "swing", "partial_trim"]},
+        "profit_mode": {"type": "string"},
+        "entry_price": {"type": "number"},
+        "target_price": {"type": "number"},
+        "stop_loss": {"type": "number"},
+        "shares": {"type": "integer"},
+        "expected_gain": {"type": "number"},
+        "max_loss": {"type": "number"},
+        "reward_risk_ratio": {"type": "number"},
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+        "rationale": {"type": "string"},
+        "setup_type": {"type": "string"},
+        "uses_existing_holding": {"type": "boolean"},
+        "cost_basis": {"type": ["number", "null"]},
+        "current_unrealized_pnl": {"type": ["number", "null"]},
+        "avg_daily_range_pct": {"type": ["number", "null"]},
+        "robinhood_instructions": {"type": "string"},
+        "ml_probability": {"type": ["number", "null"]},
+        "ml_calibration_note": {"type": ["string", "null"]},
+    },
+    "required": [
+        "ticker",
+        "direction",
+        "trade_type",
+        "profit_mode",
+        "entry_price",
+        "target_price",
+        "stop_loss",
+        "shares",
+        "expected_gain",
+        "max_loss",
+        "reward_risk_ratio",
+        "confidence",
+        "rationale",
+        "setup_type",
+        "uses_existing_holding",
+        "cost_basis",
+        "current_unrealized_pnl",
+        "avg_daily_range_pct",
+        "robinhood_instructions",
+        "ml_probability",
+        "ml_calibration_note",
+    ],
+}
+
+_SUBMIT_SUGGESTIONS_TOOL = {
+    "name": "submit_trade_suggestions",
+    "description": (
+        "Deliver your final trade suggestions. Call this exactly once, after you are "
+        "done gathering data — this is the only way to answer, do not respond in plain text."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "goal": {"type": "number"},
+            "profit_mode": {"type": "string"},
+            "trade_scope": {"type": "string"},
+            "risk_note": {"type": "string"},
+            "market_conditions": {"type": "string"},
+            "intraday_viability": {"type": ["string", "null"]},
+            "guardrails_checked": {"type": "array", "items": {"type": "string"}},
+            "any_guardrail_triggered": {"type": "boolean"},
+            "recommended": {"anyOf": [_TRADE_SETUP_SCHEMA, {"type": "null"}]},
+            "suggestions": {"type": "array", "items": _TRADE_SETUP_SCHEMA},
+        },
+        "required": [
+            "goal",
+            "profit_mode",
+            "trade_scope",
+            "risk_note",
+            "market_conditions",
+            "intraday_viability",
+            "guardrails_checked",
+            "any_guardrail_triggered",
+            "recommended",
+            "suggestions",
+        ],
+    },
+}
+
+
 def _execute_tool(name: str, tool_input: dict) -> dict | list:
     logger.info("Tool call: %s inputs=%s", name, tool_input)
     if name == "get_portfolio":
@@ -313,14 +363,23 @@ def _execute_tool(name: str, tool_input: dict) -> dict | list:
     raise ValueError(f"Unknown tool: {name}")
 
 
-def _agentic_call(system: str, payload: dict, max_iterations: int = 5) -> str:
+def _agentic_call(
+    system: str,
+    payload: dict,
+    tools: list[dict],
+    finish_tool: str | None = None,
+    max_iterations: int = 6,
+) -> str | dict:
     """Run the Anthropic tool-use agentic loop.
 
-    Claude receives the seed payload, may emit tool_use blocks, and eventually
-    returns end_turn with the final text response.
+    Claude receives the seed payload and may emit tool_use blocks. If finish_tool is
+    set, Claude must deliver its final answer by calling that tool — its input is
+    returned directly as a dict, guaranteeing schema-valid output instead of relying
+    on Claude to format a plain-text response correctly. If Claude answers with plain
+    text instead (stop_reason="end_turn") while finish_tool is set, it is nudged to
+    call the tool instead. Without finish_tool, the final end_turn text is returned.
     """
     messages = [{"role": "user", "content": json.dumps(payload, default=str)}]
-    tools = _build_tools()
     for _ in range(max_iterations):
         response = _get_client().messages.create(
             model=_MODEL,
@@ -329,30 +388,53 @@ def _agentic_call(system: str, payload: dict, max_iterations: int = 5) -> str:
             tools=tools,
             messages=messages,
         )
+        if response.stop_reason == "tool_use":
+            messages.append({"role": "assistant", "content": response.content})
+            results = []
+            finish_input = None
+            for block in response.content:
+                if block.type != "tool_use":
+                    continue
+                if finish_tool and block.name == finish_tool:
+                    finish_input = block.input
+                    results.append(
+                        {"type": "tool_result", "tool_use_id": block.id, "content": "Received."}
+                    )
+                    continue
+                try:
+                    result = _execute_tool(block.name, block.input)
+                except Exception as exc:
+                    logger.exception("Tool %s failed", block.name)
+                    result = {"error": str(exc)}
+                results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": json.dumps(result, default=str),
+                    }
+                )
+            if finish_input is not None:
+                return finish_input
+            messages.append({"role": "user", "content": results})
+            continue
         if response.stop_reason == "end_turn":
+            if finish_tool:
+                messages.append({"role": "assistant", "content": response.content})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"You must call the {finish_tool} tool to submit your answer. "
+                            "Do not respond in plain text."
+                        ),
+                    }
+                )
+                continue
             for block in response.content:
                 if hasattr(block, "text"):
                     return block.text
             return ""
-        if response.stop_reason == "tool_use":
-            messages.append({"role": "assistant", "content": response.content})
-            results = []
-            for block in response.content:
-                if block.type == "tool_use":
-                    try:
-                        result = _execute_tool(block.name, block.input)
-                    except Exception as exc:
-                        logger.exception("Tool %s failed", block.name)
-                        result = {"error": str(exc)}
-                    results.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": json.dumps(result, default=str),
-                        }
-                    )
-            messages.append({"role": "user", "content": results})
-    raise ValueError(f"Agentic loop exceeded {max_iterations} iterations without end_turn")
+    raise ValueError(f"Agentic loop exceeded {max_iterations} iterations without a final answer")
 
 
 def morning_briefing(ctx: DailyContext) -> str:
@@ -406,13 +488,8 @@ def suggest_trades(
         goal_dollars=int(seed["daily_goal"]),
     )
     payload = {**seed, "allow_loss": allow_loss, "user_message": user_message}
-    raw = _extract_json(_agentic_call(system, payload))
-    if not raw:
-        raise ValueError("Claude returned empty response from agentic loop")
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Claude returned invalid JSON: {e}\nRaw: {raw[:500]}")
+    tools = _build_tools() + [_SUBMIT_SUGGESTIONS_TOOL]
+    parsed = _agentic_call(system, payload, tools=tools, finish_tool="submit_trade_suggestions")
 
     # Inject envelope fields in case Claude omitted them
     parsed.setdefault("goal", seed["daily_goal"])
