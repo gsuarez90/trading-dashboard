@@ -9,7 +9,7 @@ const RULE_LABELS = {
   reward_risk_minimum:   'Reward/Risk Minimum',
   daily_trade_limit:     'Daily Trade Limit',
   market_hours_lock:     'Market Hours Lock',
-  intraday_60min_cutoff: 'Intraday 60-Min Cutoff',
+  intraday_30min_cutoff: 'Intraday 30-Min Cutoff',
   buying_power_check:    'Buying Power Check',
 }
 
@@ -38,7 +38,7 @@ function StatusCards({ status }) {
     {
       label: 'Intraday Window',
       value: hours.intraday_window_open ? 'Open' : 'Closed',
-      sub: hours.intraday_window_open ? '>60 min remaining' : 'Past 3:00 PM ET',
+      sub: hours.intraday_window_open ? '>30 min remaining' : 'Past 3:30 PM ET',
       ok: hours.intraday_window_open,
     },
     {

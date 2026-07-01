@@ -9,7 +9,7 @@ from services import dynamo_service
 ET = ZoneInfo("America/New_York")
 _MARKET_OPEN = time(9, 30)
 _MARKET_CLOSE = time(16, 0)
-_INTRADAY_CUTOFF = time(15, 0)  # intraday trades need >= 60 min remaining
+_INTRADAY_CUTOFF = time(15, 30)  # intraday trades need >= 30 min remaining
 
 
 # ── Context + Result types ────────────────────────────────────────────────────
@@ -113,7 +113,7 @@ def _check_intraday_cutoff(trade: TradeSetup, ctx: GuardrailContext) -> tuple[bo
         return False, ""
     now_et = ctx.current_et()
     if now_et.time() >= _INTRADAY_CUTOFF:
-        return True, "Less than 60 minutes left in session — intraday trade blocked"
+        return True, "Less than 30 minutes left in session — intraday trade blocked"
     return False, ""
 
 
@@ -135,7 +135,7 @@ _CHECKS = [
     ("reward_risk_minimum", _check_reward_risk),
     ("daily_trade_limit", _check_daily_trade_limit),
     ("market_hours_lock", _check_market_hours),
-    ("intraday_60min_cutoff", _check_intraday_cutoff),
+    ("intraday_30min_cutoff", _check_intraday_cutoff),
     ("buying_power_check", _check_buying_power),
 ]
 

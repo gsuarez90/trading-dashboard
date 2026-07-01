@@ -26,7 +26,7 @@ _GUARDRAIL_NAMES = [
     "reward_risk_minimum",
     "daily_trade_limit",
     "market_hours_lock",
-    "intraday_60min_cutoff",
+    "intraday_30min_cutoff",
     "buying_power_check",
 ]
 
@@ -92,7 +92,7 @@ When generating trade suggestions:
 - Respect trade_scope strictly
 - Respect profit_mode:
   * cash_intraday: entry AND exit must happen today. Only suggest stocks
-    with sufficient avg_daily_range_pct. Do not suggest with < 60 min left.
+    with sufficient avg_daily_range_pct. Do not suggest with < 30 min left.
   * swing: overnight holds acceptable
   * holdings: partial trims and rebuys only
 - Calculate position sizes from available cash and shares owned

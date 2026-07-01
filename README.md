@@ -778,7 +778,7 @@ All 8 guardrails run through `guardrail_service.check_all()` in `backend/service
 | `reward_risk_minimum` | Target gain ÷ max loss | Ratio is below 1.5 |
 | `daily_trade_limit` | Trades placed today | `DAILY_TRADE_LIMIT` (2 default) already reached. Bypassed when `PDT_EXEMPT=true` in SSM (for accounts above the $25k PDT threshold) |
 | `market_hours_lock` | Current time (ET) | Outside 9:30am–4:00pm ET, Monday–Friday |
-| `intraday_60min_cutoff` | Current time for intraday trades | After 3:00pm ET — less than 60 minutes left in session |
+| `intraday_30min_cutoff` | Current time for intraday trades | After 3:30pm ET — less than 30 minutes left in session |
 | `buying_power_check` | Trade value vs cash balance | Insufficient cash to cover the full position |
 
 **Kill switch:** Two-step confirm in GuardrailsPanel. Immediately closes all open paper trades (`close_reason="kill_switch"`) and sets `flagged_for_manual_close=true` on live trades. The app never auto-closes live positions.

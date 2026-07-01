@@ -23,7 +23,7 @@ TABLE_NAME = "trading-dashboard-test"
 TODAY = "2026-05-20"
 MARKET_OPEN_TIME = datetime(2026, 5, 20, 10, 0, 0)  # Tuesday 10:00am ET
 AFTER_HOURS_TIME = datetime(2026, 5, 20, 17, 0, 0)  # Tuesday 5:00pm ET
-INTRADAY_LATE_TIME = datetime(2026, 5, 20, 15, 1, 0)  # Tuesday 3:01pm ET — < 60 min left
+INTRADAY_LATE_TIME = datetime(2026, 5, 20, 15, 31, 0)  # Tuesday 3:31pm ET — < 30 min left
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -233,12 +233,12 @@ def test_market_hours_lock_prevents_after_hours_suggestions():
     assert "market_hours_lock" in result.triggered
 
 
-def test_intraday_suggestion_blocked_under_60_min_remaining():
+def test_intraday_suggestion_blocked_under_30_min_remaining():
     ctx = _make_ctx(now=INTRADAY_LATE_TIME)
     trade = _make_valid_trade(trade_type="intraday_cash")
     result = check_all(trade, ctx)
     assert not result.allowed
-    assert "intraday_60min_cutoff" in result.triggered
+    assert "intraday_30min_cutoff" in result.triggered
 
 
 def test_daily_trade_limit_blocks_at_threshold():
