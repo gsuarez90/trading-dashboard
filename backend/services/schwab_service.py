@@ -323,8 +323,16 @@ def get_technical_indicators(tickers: list[str]) -> dict[str, dict]:
     full weight, giving a much fuller baseline early in the session than
     excluding the whole opening range would.
 
-    Runs all tickers in parallel. Skips tickers with fewer than 6 five-min
-    buckets (not enough history for EMA(6) to be meaningful).
+    EMA(3) and EMA(6) seed with the first bucket's close (not an N-period SMA),
+    matching how most charting platforms render EMA lines from the first bar
+    rather than waiting for N complete periods — the same convention Robinhood's
+    own charts use. Early readings are naturally less "settled" (closer to the
+    seed value) until enough bars have accumulated, which is expected EMA
+    behavior, not a defect.
+
+    Runs all tickers in parallel. Skips tickers until the opening range itself
+    is complete (5 one-min candles, 9:30-9:35am) — ORH/ORL need that full
+    5-minute window to be a fixed, meaningful reference level.
 
     Returns dict keyed by ticker:
     {
@@ -352,12 +360,12 @@ def get_technical_indicators(tickers: list[str]) -> dict[str, dict]:
             )
             resp.raise_for_status()
             candles = resp.json().get("candles", [])
+            if len(candles) < 5:
+                return ticker, None
 
             # 5-min buckets from 1-min candles — preserves ORH/ORL/EMA's original
             # lookback window. Last bucket may be partial (still-forming 5-min bar).
             buckets = [candles[i : i + 5] for i in range(0, len(candles), 5)]
-            if len(buckets) < 6:
-                return ticker, None
 
             bucket_highs = [max(float(c["high"]) for c in b) for b in buckets]
             bucket_lows = [min(float(c["low"]) for c in b) for b in buckets]
@@ -366,12 +374,14 @@ def get_technical_indicators(tickers: list[str]) -> dict[str, dict]:
             orh = round(bucket_highs[0], 2)
             orl = round(bucket_lows[0], 2)
 
-            # EMA — seed with SMA of first `period` buckets, then smooth forward
+            # EMA — seed with the first bucket's close (not an N-period SMA), then
+            # smooth forward. Always computable, even with just one bucket — early
+            # readings sit closer to the seed value until more bars accumulate,
+            # same convention most charting platforms (including Robinhood) use.
             def _ema(period: int) -> float:
-                sma = sum(bucket_closes[:period]) / period
                 k = 2 / (period + 1)
-                val = sma
-                for price in bucket_closes[period:]:
+                val = bucket_closes[0]
+                for price in bucket_closes[1:]:
                     val = price * k + val * (1 - k)
                 return round(val, 4)
 
