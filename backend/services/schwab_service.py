@@ -315,11 +315,13 @@ def get_technical_indicators(tickers: list[str]) -> dict[str, dict]:
     bucket[0] (the first 5 one-min candles, 9:30-9:35am) is the opening range —
     its high/low are the Opening Range High (ORH) and Opening Range Low (ORL).
 
-    RVOL compares the latest 1-min candle's volume to the average volume of
-    every 1-min candle since the opening range (excluding the opening range
-    itself, which is structurally always the day's highest-volume period and
-    would otherwise skew a same-day baseline — especially early in the
-    session when few candles exist to average against).
+    RVOL compares the latest 1-min candle's volume to a weighted average of
+    every prior 1-min candle today. Only the very first candle (the 9:30-9:31am
+    opening auction print, structurally the day's biggest single-minute volume
+    event) is down-weighted by half rather than excluded — candles 2-5 of the
+    opening range already trade like normal continuous flow and are kept at
+    full weight, giving a much fuller baseline early in the session than
+    excluding the whole opening range would.
 
     Runs all tickers in parallel. Skips tickers with fewer than 6 five-min
     buckets (not enough history for EMA(6) to be meaningful).
@@ -395,12 +397,17 @@ def get_technical_indicators(tickers: list[str]) -> dict[str, dict]:
 
             current = closes[-1]
 
-            # RVOL — current 1-min candle vs the average of 1-min candles since
-            # the opening range (excludes the opening range itself and the
-            # current candle from its own baseline).
-            post_opening_vols = vols[5:-1]
-            if post_opening_vols:
-                baseline = sum(post_opening_vols) / len(post_opening_vols)
+            # RVOL — current 1-min candle vs a weighted baseline of every prior
+            # 1-min candle today. Only the very first candle (9:30-9:31am, the
+            # opening auction print) is down-weighted rather than excluded — it's
+            # a genuine outlier since the opening cross concentrates pent-up
+            # orders into one discrete print, but candles 2-5 of the opening
+            # range already trade more like normal continuous flow and carry
+            # real baseline signal worth keeping.
+            baseline_vols = vols[:-1]
+            if baseline_vols:
+                weights = [0.5 if i == 0 else 1.0 for i in range(len(baseline_vols))]
+                baseline = sum(v * w for v, w in zip(baseline_vols, weights)) / sum(weights)
                 rvol = round(vols[-1] / baseline, 2) if baseline > 0 else None
             else:
                 rvol = None

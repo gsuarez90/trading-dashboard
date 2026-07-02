@@ -371,10 +371,11 @@ Backend:     routers/ai.py → suggest_trades(request)
                          │              orl: opening range low  (low of first bucket)
                          │              ema_3, ema_6: EMAs across 5-min bucket closes
                          │              vwap: cumulative volume-weighted avg price (1-min)
-                         │              rvol: current 1-min candle's volume vs the average
-                         │                    since the opening range (opening range itself
-                         │                    excluded — it's always the day's highest-volume
-                         │                    period and would skew an early, thin baseline).
+                         │              rvol: current 1-min candle's volume vs a weighted
+                         │                    baseline of every prior 1-min candle today.
+                         │                    Only the 9:30-9:31am opening print is
+                         │                    down-weighted by half (genuine outlier); the
+                         │                    rest of the opening range trades at full weight.
                          │                    Informational only — not a hard gate.
                          │              bounce_setup: true when EMA(3)>EMA(6) AND
                          │                            price>VWAP AND price>=ORH
@@ -827,7 +828,7 @@ Claude's trade suggestions are built around the 5-minute opening range — the p
 | `ema_3` | EMA across 5-min bucket closes today (short-term momentum) |
 | `ema_6` | EMA across 5-min bucket closes today (medium-term trend) |
 | `vwap` | Cumulative volume-weighted average price since open (1-min resolution) |
-| `rvol` | Current 1-min candle's volume vs. the average volume per 1-min candle since the opening range (opening range itself excluded from the baseline — it's structurally always the day's highest-volume period and would otherwise skew an early, thin sample). Informational only, not a hard gate — Claude weighs it in its rationale and confidence. |
+| `rvol` | Current 1-min candle's volume vs. a weighted average of every prior 1-min candle today. Only the 9:30-9:31am opening print (the opening auction, a genuine one-minute outlier) is down-weighted by half; candles 2-5 of the opening range trade at full weight since they already behave like normal continuous flow. Informational only, not a hard gate — Claude weighs it in its rationale and confidence. |
 | `bounce_setup` | `true` when EMA(3) > EMA(6) AND price > VWAP AND price ≥ ORH |
 | `price_below_orl` | `true` when price has broken below the opening range low (bearish — skip) |
 
