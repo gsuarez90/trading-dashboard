@@ -110,11 +110,23 @@ When generating trade suggestions:
     orl: Opening Range Low  — low of the 9:30-9:35am opening candle (breakdown level)
     ema_3, ema_6: exponential moving averages across all 5-min closes today
     vwap: cumulative volume-weighted average price since open
+    rvol: current 1-min candle's volume vs the average volume per 1-min candle
+      since the opening range. rvol above ~1 means volume is keeping pace with
+      or exceeding the recent baseline; below ~1 means it's fading. This is
+      informational only — weigh it in your rationale and confidence, but do
+      not treat any specific rvol value as a hard requirement to qualify or
+      reject a setup.
     ema_3_above_ema_6: boolean — short-term momentum is up
     price_above_vwap: boolean — day is net-bullish for this name
     price_above_orh: boolean — price has broken above the opening range high
     price_below_orl: boolean — price has broken below the opening range low (bearish)
     bounce_setup: boolean — true when EMA(3) > EMA(6), price > VWAP, and price >= ORH
+- IONZ is -2x inverse of the single stock IONQ (not a broad index) — IONQ's
+  technical_indicators are always fetched alongside IONZ automatically. Before
+  recommending an IONZ setup, check that IONQ actually shows the corresponding
+  opposite structure (e.g., IONQ price_below_orl=true supporting an IONZ long).
+  Treat an IONZ bounce_setup with more skepticism if IONQ isn't confirming —
+  IONZ is a small, thinly-traded fund where its own tape can be noisy.
 - ONLY suggest LONG trades. No short setups.
 - The catalyst for every long is the opening 5-min candle. A valid long setup requires
   bounce_setup=true: price broke above the ORH and is holding at or above it (ORH becomes
@@ -223,8 +235,9 @@ def _build_tools() -> list[dict]:
             "name": "get_technical_indicators",
             "description": (
                 "Fetch 5-min opening range indicators (ORH, ORL, EMA(3), EMA(6), VWAP, "
-                "bounce_setup) for a list of tickers. Always include TQQQ and IONZ. "
-                "Call get_top_movers first, then pass those tickers plus TQQQ and IONZ here."
+                "RVOL, bounce_setup) for a list of tickers. Always include TQQQ and IONZ. "
+                "Call get_top_movers first, then pass those tickers plus TQQQ and IONZ here. "
+                "IONQ is fetched automatically whenever IONZ is requested — no need to add it."
             ),
             "input_schema": {
                 "type": "object",
@@ -366,7 +379,12 @@ def _execute_tool(name: str, tool_input: dict) -> dict | list:
             return [s for s in cached if s.get("ticker") in set(tickers)] if tickers else cached
         return finnhub_service.score_batch_sentiment(tickers)
     if name == "get_technical_indicators":
-        return schwab_service.get_technical_indicators(tool_input.get("tickers", []))
+        tickers = tool_input.get("tickers", [])
+        # IONZ is -2x inverse of the single stock IONQ (not a broad index) — always
+        # fetch IONQ alongside it so its structure can confirm or contradict the move.
+        if "IONZ" in tickers and "IONQ" not in tickers:
+            tickers = [*tickers, "IONQ"]
+        return schwab_service.get_technical_indicators(tickers)
     if name == "get_quotes":
         return schwab_service.get_batch_quotes(tool_input.get("tickers", []))
     raise ValueError(f"Unknown tool: {name}")

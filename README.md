@@ -358,14 +358,24 @@ Backend:     routers/ai.py → suggest_trades(request)
                          │
                          │  Iteration 2 — Claude calls with specific tickers:
                          ├─ get_technical_indicators(tickers=[...movers..., "TQQQ", "IONZ"])
+                         │    └─ IONZ requested → IONQ auto-added (IONZ is -2x inverse
+                         │       of the single stock IONQ, not a broad index — Claude
+                         │       checks IONQ's structure confirms before trusting IONZ)
                          │    └─ schwab_service.get_technical_indicators(tickers)
-                         │         └─ Fetches 5-min bars for each ticker
-                         │         └─ candles[0] = opening 9:30-9:35am candle
+                         │         └─ Fetches 1-min bars for each ticker
+                         │         └─ Aggregated into 5-min buckets for ORH/ORL/EMA —
+                         │            preserves the original 15-min/30-min EMA lookback
+                         │         └─ bucket[0] = opening 9:30-9:35am range
                          │         └─ Computes per ticker:
-                         │              orh: opening range high (high of first candle)
-                         │              orl: opening range low  (low of first candle)
-                         │              ema_3, ema_6: EMAs across all 5-min closes
-                         │              vwap: cumulative volume-weighted avg price
+                         │              orh: opening range high (high of first bucket)
+                         │              orl: opening range low  (low of first bucket)
+                         │              ema_3, ema_6: EMAs across 5-min bucket closes
+                         │              vwap: cumulative volume-weighted avg price (1-min)
+                         │              rvol: current 1-min candle's volume vs the average
+                         │                    since the opening range (opening range itself
+                         │                    excluded — it's always the day's highest-volume
+                         │                    period and would skew an early, thin baseline).
+                         │                    Informational only — not a hard gate.
                          │              bounce_setup: true when EMA(3)>EMA(6) AND
                          │                            price>VWAP AND price>=ORH
                          │
@@ -808,19 +818,22 @@ Non-secret config (PORTFOLIO_MODE, TRADING_MODE, DAILY_GOAL, etc.) uses plain SS
 
 ## Opening Range Strategy
 
-Claude's trade suggestions are built around the 5-minute opening range — the price band established in the first candle of the session (9:30–9:35am ET). `schwab_service.get_technical_indicators()` fetches intraday 5-min bars for each candidate ticker and computes:
+Claude's trade suggestions are built around the 5-minute opening range — the price band established in the first candle of the session (9:30–9:35am ET). `schwab_service.get_technical_indicators()` fetches intraday **1-min** bars for each candidate ticker, then aggregates them into 5-min buckets for ORH/ORL/EMA — preserving their original 15-min/30-min lookback character — while using the raw 1-min series for RVOL and current price. It computes:
 
 | Field | Meaning |
 |-------|---------|
-| `orh` | Opening Range High — high of the 9:30–9:35am candle |
-| `orl` | Opening Range Low — low of the 9:30–9:35am candle |
-| `ema_3` | EMA across all 5-min closes today (short-term momentum) |
-| `ema_6` | EMA across all 5-min closes today (medium-term trend) |
-| `vwap` | Cumulative volume-weighted average price since open |
+| `orh` | Opening Range High — high of the 9:30–9:35am bucket (first 5 one-min candles) |
+| `orl` | Opening Range Low — low of the 9:30–9:35am bucket |
+| `ema_3` | EMA across 5-min bucket closes today (short-term momentum) |
+| `ema_6` | EMA across 5-min bucket closes today (medium-term trend) |
+| `vwap` | Cumulative volume-weighted average price since open (1-min resolution) |
+| `rvol` | Current 1-min candle's volume vs. the average volume per 1-min candle since the opening range (opening range itself excluded from the baseline — it's structurally always the day's highest-volume period and would otherwise skew an early, thin sample). Informational only, not a hard gate — Claude weighs it in its rationale and confidence. |
 | `bounce_setup` | `true` when EMA(3) > EMA(6) AND price > VWAP AND price ≥ ORH |
 | `price_below_orl` | `true` when price has broken below the opening range low (bearish — skip) |
 
 A valid long setup requires `bounce_setup=true`: the stock broke above its ORH and is holding there with bullish EMA momentum and net-positive buying pressure (above VWAP). Entry is at or just above the ORH; the ORH becomes support. Stop loss sits just below the ORL — if price retreats there, the opening structure has failed.
+
+**IONZ / IONQ:** IONZ is a small fund that is -2x inverse of the single stock IONQ (not a broad index). Whenever `get_technical_indicators` is called with IONZ, `claude_service._execute_tool()` automatically adds IONQ to the request. Claude is instructed to check that IONQ's own structure (e.g. a broken ORL) actually confirms an IONZ long before treating it as high-conviction, since IONZ's own tape is thin and noisy on its own.
 
 `TQQQ` and `IONZ` are always included in the indicator fetch regardless of where they rank on the day's scanner, because they won't appear in Schwab's index-component mover API but are always in scope as candidates.
 

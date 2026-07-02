@@ -306,20 +306,28 @@ def get_daily_bars(ticker: str, from_date: str, to_date: str) -> list[dict]:
 def get_technical_indicators(tickers: list[str]) -> dict[str, dict]:
     """5-min intraday indicators using the opening range candle as the catalyst.
 
-    Fetches today's 5-min bars for each ticker via Schwab price history.
-    candles[0] = the 9:30-9:35am opening candle — its high/low are the
-    Opening Range High (ORH) and Opening Range Low (ORL) for the day.
+    Fetches today's 1-min bars for each ticker via Schwab price history, then
+    aggregates them into 5-min buckets for ORH/ORL/EMA(3)/EMA(6) — this keeps
+    those indicators' original 15-min/30-min lookback character (low noise)
+    while still giving RVOL access to finer-grained volume data than a single
+    5-min fetch would provide.
 
-    EMA(3) and EMA(6) are computed across all 5-min closes so far today.
-    VWAP is cumulative from open to now.
+    bucket[0] (the first 5 one-min candles, 9:30-9:35am) is the opening range —
+    its high/low are the Opening Range High (ORH) and Opening Range Low (ORL).
 
-    Runs all tickers in parallel. Skips tickers with fewer than 6 bars
-    (not enough history for EMA(6) to be meaningful).
+    RVOL compares the latest 1-min candle's volume to the average volume of
+    every 1-min candle since the opening range (excluding the opening range
+    itself, which is structurally always the day's highest-volume period and
+    would otherwise skew a same-day baseline — especially early in the
+    session when few candles exist to average against).
+
+    Runs all tickers in parallel. Skips tickers with fewer than 6 five-min
+    buckets (not enough history for EMA(6) to be meaningful).
 
     Returns dict keyed by ticker:
     {
-        orh, orl,                        # opening range high/low (9:30-9:35am candle)
-        ema_3, ema_6, vwap,
+        orh, orl,                        # opening range high/low (9:30-9:35am)
+        ema_3, ema_6, vwap, rvol,
         ema_3_above_ema_6, price_above_vwap,
         price_above_orh, price_below_orl,
         current_price, bounce_setup
@@ -334,7 +342,7 @@ def get_technical_indicators(tickers: list[str]) -> dict[str, dict]:
 
     def _compute(ticker: str) -> tuple[str, dict | None]:
         try:
-            resp = _get_client().get_price_history_every_five_minutes(
+            resp = _get_client().get_price_history_every_minute(
                 ticker,
                 start_datetime=start,
                 end_datetime=end,
@@ -342,53 +350,75 @@ def get_technical_indicators(tickers: list[str]) -> dict[str, dict]:
             )
             resp.raise_for_status()
             candles = resp.json().get("candles", [])
-            if len(candles) < 6:
+
+            # 5-min buckets from 1-min candles — preserves ORH/ORL/EMA's original
+            # lookback window. Last bucket may be partial (still-forming 5-min bar).
+            buckets = [candles[i : i + 5] for i in range(0, len(candles), 5)]
+            if len(buckets) < 6:
                 return ticker, None
 
-            closes = [float(c["close"]) for c in candles]
-            highs  = [float(c["high"])  for c in candles]
-            lows   = [float(c["low"])   for c in candles]
-            vols   = [float(c["volume"]) for c in candles]
+            bucket_highs = [max(float(c["high"]) for c in b) for b in buckets]
+            bucket_lows = [min(float(c["low"]) for c in b) for b in buckets]
+            bucket_closes = [float(b[-1]["close"]) for b in buckets]
 
-            # Opening range levels — always the first 5-min candle of the day
-            orh = round(highs[0], 2)
-            orl = round(lows[0], 2)
+            orh = round(bucket_highs[0], 2)
+            orl = round(bucket_lows[0], 2)
 
-            # EMA — seed with SMA of first `period` candles, then smooth forward
+            # EMA — seed with SMA of first `period` buckets, then smooth forward
             def _ema(period: int) -> float:
-                sma = sum(closes[:period]) / period
+                sma = sum(bucket_closes[:period]) / period
                 k = 2 / (period + 1)
                 val = sma
-                for price in closes[period:]:
+                for price in bucket_closes[period:]:
                     val = price * k + val * (1 - k)
                 return round(val, 4)
 
-            # VWAP: cumulative from open — sum(typical_price * volume) / sum(volume)
-            total_vol = sum(vols)
-            vwap = round(
-                sum((highs[i] + lows[i] + closes[i]) / 3 * vols[i] for i in range(len(candles)))
-                / total_vol, 4
-            ) if total_vol > 0 else None
-
             ema3 = _ema(3)
             ema6 = _ema(6)
+
+            # VWAP and current price — computed on the raw 1-min series for precision
+            closes = [float(c["close"]) for c in candles]
+            highs = [float(c["high"]) for c in candles]
+            lows = [float(c["low"]) for c in candles]
+            vols = [float(c["volume"]) for c in candles]
+
+            total_vol = sum(vols)
+            vwap = (
+                round(
+                    sum((highs[i] + lows[i] + closes[i]) / 3 * vols[i] for i in range(len(candles)))
+                    / total_vol,
+                    4,
+                )
+                if total_vol > 0
+                else None
+            )
+
             current = closes[-1]
 
+            # RVOL — current 1-min candle vs the average of 1-min candles since
+            # the opening range (excludes the opening range itself and the
+            # current candle from its own baseline).
+            post_opening_vols = vols[5:-1]
+            if post_opening_vols:
+                baseline = sum(post_opening_vols) / len(post_opening_vols)
+                rvol = round(vols[-1] / baseline, 2) if baseline > 0 else None
+            else:
+                rvol = None
+
             return ticker, {
-                "orh":               orh,
-                "orl":               orl,
-                "ema_3":             ema3,
-                "ema_6":             ema6,
-                "vwap":              vwap,
-                "current_price":     round(current, 2),
+                "orh": orh,
+                "orl": orl,
+                "ema_3": ema3,
+                "ema_6": ema6,
+                "vwap": vwap,
+                "rvol": rvol,
+                "current_price": round(current, 2),
                 "ema_3_above_ema_6": ema3 > ema6,
-                "price_above_vwap":  vwap is not None and current > vwap,
-                "price_above_orh":   current > orh,
-                "price_below_orl":   current < orl,
+                "price_above_vwap": vwap is not None and current > vwap,
+                "price_above_orh": current > orh,
+                "price_below_orl": current < orl,
                 "bounce_setup": (
-                    ema3 > ema6
-                    and vwap is not None and current > vwap
-                    and current >= orh
+                    ema3 > ema6 and vwap is not None and current > vwap and current >= orh
                 ),
             }
         except Exception:
