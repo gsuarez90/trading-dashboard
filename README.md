@@ -357,9 +357,11 @@ Backend:     routers/ai.py → suggest_trades(request)
                          │    └─ Returns list of today's top movers (price, change %, vol)
                          │
                          │  Iteration 2 — Claude calls with specific tickers:
-                         ├─ get_technical_indicators(tickers=[...movers..., "TQQQ", "IONZ"])
-                         │    └─ IONZ requested → IONQ auto-added (IONZ is -2x inverse
-                         │       of the single stock IONQ, not a broad index — Claude
+                         ├─ get_technical_indicators(tickers=[...movers..., "TQQQ", "SQQQ", "IONZ", "IONQ"])
+                         │    └─ TQQQ/SQQQ are opposing 3x-leveraged Nasdaq-100 bets — evaluated
+                         │       independently, never suggested together
+                         │    └─ IONZ requested → IONQ auto-added as a safety net (IONZ is -2x
+                         │       inverse of the single stock IONQ, not a broad index — Claude
                          │       checks IONQ's structure confirms before trusting IONZ)
                          │    └─ schwab_service.get_technical_indicators(tickers)
                          │         └─ Fetches 1-min bars for each ticker
@@ -403,7 +405,7 @@ Suggestion   Only LONG trades suggested. Valid setup requires bounce_setup=true 
 strategy:    price broke above the ORH (Opening Range High) and is holding there
              with EMA(3) > EMA(6) and price above VWAP. Entry at/above ORH; stop
              just below ORL. Tickers where price_below_orl=true are excluded.
-             TQQQ and IONZ always included regardless of scanner ranking.
+             TQQQ, SQQQ, IONZ, and IONQ always included regardless of scanner ranking.
              Minimum reward/risk ratio: 1.5. Daily goal: $400.
 
 Response:    Each suggestion as a card showing all trade parameters
@@ -834,9 +836,17 @@ Claude's trade suggestions are built around the 5-minute opening range — the p
 
 A valid long setup requires `bounce_setup=true`: the stock broke above its ORH and is holding there with bullish EMA momentum and net-positive buying pressure (above VWAP). Entry is at or just above the ORH; the ORH becomes support. Stop loss sits just below the ORL — if price retreats there, the opening structure has failed.
 
-**IONZ / IONQ:** IONZ is a small fund that is -2x inverse of the single stock IONQ (not a broad index). Whenever `get_technical_indicators` is called with IONZ, `claude_service._execute_tool()` automatically adds IONQ to the request. Claude is instructed to check that IONQ's own structure (e.g. a broken ORL) actually confirms an IONZ long before treating it as high-conviction, since IONZ's own tape is thin and noisy on its own.
+**IONZ / IONQ:** IONZ is a small fund that is -2x inverse of the single stock IONQ (not a broad index). Whenever `get_technical_indicators` is called with IONZ, `claude_service._execute_tool()` automatically adds IONQ to the request as a safety net (IONQ is also always pinned directly, so this rarely triggers). Claude is instructed to check that IONQ's own structure (e.g. a broken ORL) actually confirms an IONZ long before treating it as high-conviction, since IONZ's own tape is thin and noisy on its own.
 
-`TQQQ` and `IONZ` are always included in the indicator fetch regardless of where they rank on the day's scanner, because they won't appear in Schwab's index-component mover API but are always in scope as candidates.
+**TQQQ / SQQQ:** SQQQ is the -3x leveraged inverse of the Nasdaq-100, the mirror image of TQQQ's +3x exposure. Since the strategy only suggests long trades, a bearish view on the Nasdaq is expressed as a long SQQQ trade rather than a short. Claude evaluates TQQQ and SQQQ independently against `bounce_setup` and is instructed never to suggest both at once, since they're opposing bets on the same underlying index.
+
+`TQQQ`, `SQQQ`, `IONZ`, and `IONQ` are always included in the indicator fetch regardless of where they rank on the day's scanner, because they won't appear in Schwab's index-component mover API but are always in scope as candidates.
+
+**Timing cautions (informational, non-blocking):** Two flags in the `suggest-trades` seed payload warn Claude about lower-quality-setup windows without stopping suggestions:
+- `before_10am_et` — true from 9:30-10:00am ET, while the opening range is still fresh and breakouts are more prone to reversing before they're confirmed.
+- `holiday_adjacent` — true when today is the last trading session before an extended holiday break (`schwab_service.is_holiday_adjacent_session()` walks forward via Schwab's live market-hours API to detect any NYSE holiday, not just weekends — no hardcoded holiday list to maintain). Volume can look strong on these sessions while remaining structurally thin, producing breakouts that qualify on paper but fail to hold.
+
+Both are computed server-side in `context_loader.build_seed_context()` and passed to Claude, which is instructed to mention them as a brief caution in `risk_note` but still evaluate `bounce_setup` normally.
 
 ---
 

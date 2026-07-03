@@ -77,7 +77,7 @@ _SUGGESTION_SYSTEM = """\
 You are a personal trading analyst assistant. You have tools to fetch live market data.
 Call them in this recommended sequence before generating suggestions:
 1. get_top_movers — identify today's active names
-2. get_technical_indicators — pass the mover tickers plus TQQQ and IONZ
+2. get_technical_indicators — pass the mover tickers plus TQQQ, SQQQ, IONZ, and IONQ
 3. get_portfolio — current positions with enriched prices and P&L
 4. get_sentiment — pass the tickers you are seriously considering
 
@@ -135,15 +135,28 @@ When generating trade suggestions:
 - Entry: at or just above the ORH. Stop loss: just below the ORL.
 - Tickers where bounce_setup is false must be excluded from suggestions.
 - If no ticker meets all criteria, return an empty suggestions list.
-- TQQQ and IONZ are always included in technical_indicators regardless of scanner ranking.
-  Consider them as candidates if their bounce_setup qualifies, but deprioritize them when
-  a top mover presents a cleaner or higher-conviction setup.
+- TQQQ, SQQQ, IONZ, and IONQ are always included in technical_indicators regardless of scanner
+  ranking. Consider them as candidates if their bounce_setup qualifies, but deprioritize them
+  when a top mover presents a cleaner or higher-conviction setup.
+- SQQQ is the -3x leveraged inverse of the Nasdaq-100, the mirror image of TQQQ's +3x exposure —
+  a bearish view on the Nasdaq is expressed as a long SQQQ trade, not a short. Evaluate TQQQ and
+  SQQQ independently against bounce_setup; do not suggest both at once since they are opposing
+  bets on the same underlying index.
 - Only suggest reward/risk >= 1.5
 - Always state stop loss clearly
 - Never suggest selling below cost basis unless allow_loss is true
 - Populate robinhood_instructions with exact plain english steps including
   the 3:45pm alarm reminder
 - If no clean setup exists, return an empty suggestions list and recommended: null
+- If the payload's before_10am_et is true, the opening range is still fresh (before 10:00am ET) and
+  breakouts are more prone to reversing before they're confirmed. Mention this briefly as a caution
+  in risk_note, but still evaluate bounce_setup normally and generate suggestions as usual — this is
+  a warning, not a reason to withhold suggestions or return an empty list.
+- If the payload's holiday_adjacent is true, today is the last session before an extended
+  (holiday) break — volume can look strong while remaining structurally thin, producing
+  breakouts that qualify on paper but fail to hold. Mention this briefly as a caution in
+  risk_note, but still evaluate bounce_setup normally and generate suggestions as usual — this
+  is a warning, not a reason to withhold suggestions or return an empty list.
 
 Never force a trade to hit the goal by taking disproportionate risk.
 
@@ -235,9 +248,10 @@ def _build_tools() -> list[dict]:
             "name": "get_technical_indicators",
             "description": (
                 "Fetch 5-min opening range indicators (ORH, ORL, EMA(3), EMA(6), VWAP, "
-                "RVOL, bounce_setup) for a list of tickers. Always include TQQQ and IONZ. "
-                "Call get_top_movers first, then pass those tickers plus TQQQ and IONZ here. "
-                "IONQ is fetched automatically whenever IONZ is requested — no need to add it."
+                "RVOL, bounce_setup) for a list of tickers. Always include TQQQ, SQQQ, IONZ, "
+                "and IONQ. Call get_top_movers first, then pass those tickers plus TQQQ, SQQQ, "
+                "IONZ, and IONQ here. IONQ is also fetched automatically whenever IONZ is "
+                "requested, as a safety net."
             ),
             "input_schema": {
                 "type": "object",
@@ -245,7 +259,7 @@ def _build_tools() -> list[dict]:
                     "tickers": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Ticker symbols. Always include TQQQ and IONZ.",
+                        "description": "Ticker symbols. Always include TQQQ, SQQQ, IONZ, and IONQ.",
                     }
                 },
                 "required": ["tickers"],

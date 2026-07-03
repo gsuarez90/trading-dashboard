@@ -266,6 +266,34 @@ def get_market_status() -> dict:
     }
 
 
+def _has_holiday_gap(today: date, next_trading_day: date) -> bool:
+    """True when next_trading_day is further out than the ordinary next weekday.
+
+    A gap here means a market holiday sits between today and the next session —
+    covers July 4th, Thanksgiving, Labor Day, etc. without a hardcoded holiday list.
+    """
+    expected = today + timedelta(days=1)
+    while expected.weekday() >= 5:
+        expected += timedelta(days=1)
+    return next_trading_day > expected
+
+
+def is_holiday_adjacent_session() -> bool:
+    """True when today is the last trading session before a holiday-extended break.
+
+    Reuses get_market_status()'s live Schwab forward-walk (which already resolves
+    all NYSE holidays) to find the next real trading day, then checks whether a
+    holiday — not just the weekend — sits between today and that day. Informational
+    only: thin, holiday-adjacent volume tends to produce more false breakouts.
+    """
+    status = get_market_status()
+    if not status.get("next_open_date"):
+        return False
+    today = datetime.now(tz=ET).date()
+    next_open = datetime.strptime(status["next_open_date"], "%Y-%m-%d").date()
+    return _has_holiday_gap(today, next_open)
+
+
 def get_daily_bars(ticker: str, from_date: str, to_date: str) -> list[dict]:
     """Daily OHLCV bars for a ticker. Dates as 'YYYY-MM-DD'.
 

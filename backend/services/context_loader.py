@@ -16,6 +16,7 @@ from services.guardrail_service import GuardrailContext, get_status
 ET = ZoneInfo("America/New_York")
 _MARKET_OPEN = time(9, 30)
 _MARKET_CLOSE = time(16, 0)
+_EARLY_SESSION_CUTOFF = time(10, 0)  # opening-range setups are still settling before this
 
 # Default watchlist — overridden by WATCHLIST env var (comma-separated tickers)
 _DEFAULT_TICKERS = [
@@ -37,7 +38,7 @@ _DEFAULT_TICKERS = [
 
 # Always included in every context load regardless of dynamic watchlist ranking.
 # These won't appear in the Schwab movers API but we always want setup data for them.
-_PINNED_TICKERS = ["TQQQ", "IONZ"]
+_PINNED_TICKERS = ["TQQQ", "SQQQ", "IONZ", "IONQ"]
 
 
 @dataclass
@@ -77,6 +78,11 @@ def _minutes_remaining(now_et: datetime) -> int:
         pass  # Schwab unreachable — fall through to time-based result
     close_dt = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
     return max(0, int((close_dt - now_et).total_seconds() / 60))
+
+
+def _is_before_10am_et(now_et: datetime) -> bool:
+    """True during the 9:30-10:00am ET opening window, when bounce_setup breakouts are least tested."""
+    return now_et.weekday() < 5 and _MARKET_OPEN <= now_et.time() < _EARLY_SESSION_CUTOFF
 
 
 def _enrich_positions(positions: list[dict]) -> list[dict]:
@@ -172,7 +178,6 @@ def _cached_sentiment() -> list[dict] | None:
         return None
 
 
-
 def _get_watchlist() -> list[str]:
     raw = os.environ.get("WATCHLIST", "")
     if raw:
@@ -223,14 +228,22 @@ def build_seed_context() -> dict:
         except Exception:
             return []
 
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    def _fetch_holiday_adjacent():
+        try:
+            return schwab_service.is_holiday_adjacent_session()
+        except Exception:
+            return False
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
         f_cash = pool.submit(_fetch_cash)
         f_trades = pool.submit(_fetch_trades)
         f_events = pool.submit(_fetch_guardrail_events)
+        f_holiday = pool.submit(_fetch_holiday_adjacent)
 
     cash = f_cash.result()
     trades_today = f_trades.result()
     guardrail_events = f_events.result()
+    holiday_adjacent = f_holiday.result()
 
     realized_pnl_today = round(
         sum(t.get("realized_pnl", 0) or 0 for t in trades_today if t.get("status") == "closed"),
@@ -255,6 +268,8 @@ def build_seed_context() -> dict:
         "trade_scope": trade_scope,
         "daily_goal": daily_goal,
         "minutes_remaining": _minutes_remaining(now_et),
+        "before_10am_et": _is_before_10am_et(now_et),
+        "holiday_adjacent": holiday_adjacent,
         "guardrail_status": get_status(guardrail_ctx),
         "trades_today": trades_today,
         "guardrail_events": guardrail_events,
