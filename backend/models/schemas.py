@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 # ── Claude trade suggestion models ───────────────────────────────────────────
 
@@ -27,6 +27,25 @@ class TradeSetup(BaseModel):
     robinhood_instructions: str  # plain english steps for manual placement
     ml_probability: float | None  # Phase 2
     ml_calibration_note: str | None  # Phase 2
+
+    @model_validator(mode="after")
+    def _recompute_gain_risk(self) -> "TradeSetup":
+        """Claude self-reports expected_gain/max_loss/reward_risk_ratio and its
+        arithmetic is not reliable — recompute from entry/target/stop/shares so
+        the numbers are always internally consistent with the rest of the setup.
+        """
+        if self.direction == "short":
+            gain_per_share = self.entry_price - self.target_price
+            loss_per_share = self.stop_loss - self.entry_price
+        else:
+            gain_per_share = self.target_price - self.entry_price
+            loss_per_share = self.entry_price - self.stop_loss
+
+        self.expected_gain = round(gain_per_share * self.shares, 2)
+        self.max_loss = round(loss_per_share * self.shares, 2)
+        if self.max_loss > 0:
+            self.reward_risk_ratio = round(self.expected_gain / self.max_loss, 2)
+        return self
 
 
 class TradeSuggestionResponse(BaseModel):
@@ -63,9 +82,9 @@ class PaperTrade(BaseModel):
     setup_type: str
     status: str  # "pending" | "open" | "closed" | "expired"
     mode: str  # "paper" | "live"
-    limit_price: float | None = None     # Claude's suggested entry; set at placement
-    pending_since: str | None = None     # ISO timestamp when order was queued
-    entry_time: str | None = None        # ISO timestamp when order filled
+    limit_price: float | None = None  # Claude's suggested entry; set at placement
+    pending_since: str | None = None  # ISO timestamp when order was queued
+    entry_time: str | None = None  # ISO timestamp when order filled
     entry_slippage: float | None = None  # entry_price - limit_price at fill
     exit_price: float | None = None
     exit_time: str | None = None

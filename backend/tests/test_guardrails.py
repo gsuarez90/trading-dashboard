@@ -220,7 +220,9 @@ def test_kill_switch_requires_confirmation():
 
 
 def test_reward_risk_minimum_rejects_bad_suggestions():
-    trade = _make_valid_trade(reward_risk_ratio=1.49)
+    # reward_risk_ratio is derived from entry/target/stop, not settable directly —
+    # widen the stop to bring the real ratio (gain=40 / loss=40 = 1.0) below 1.5
+    trade = _make_valid_trade(stop_loss=96.0)
     result = check_all(trade, _make_ctx())
     assert not result.allowed
     assert "reward_risk_minimum" in result.triggered
