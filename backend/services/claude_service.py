@@ -116,11 +116,43 @@ When generating trade suggestions:
       informational only — weigh it in your rationale and confidence, but do
       not treat any specific rvol value as a hard requirement to qualify or
       reject a setup.
+    peak_rvol: the highest rvol reading for this ticker so far today.
+    rvol_pct_of_peak: current rvol as a fraction of peak_rvol (e.g. 0.75 means
+      volume has cooled to 75% of today's peak). Use this to separate "never
+      had real volume" (rvol and peak_rvol both low) from "spiked hard and is
+      cooling off but still active" (current rvol looks unremarkable, but
+      peak_rvol was high) — the latter can still support a trade even though
+      the current rvol reading alone looks weak.
+    pullback_from_high_pct: how far (in %) price has pulled back from its
+      intraday high so far. A small pullback on an otherwise-bullish tape is
+      normal consolidation; a large one is a genuine warning sign. This is a
+      snapshot of where price is right now — it can look calm even after a
+      violent round trip, so always read it together with
+      closest_approach_to_orl_pct below.
+    closest_approach_to_orl_pct: how close (in %) price got to the ORL at its
+      worst point since the breakout, regardless of where it has since
+      recovered to (near 0 or negative means the level was genuinely tested
+      or briefly broken intraminute even if the current snapshot looks calm).
+      A ticker that dipped to within 1% of its ORL and bounced is a much
+      weaker "held support" story than one that never came close — even if
+      both show the same pullback_from_high_pct right now.
+    bars_since_breakout: number of completed 5-min bars since price first
+      closed above the ORH today (null if it hasn't broken out yet). A higher
+      number with price still holding well above VWAP/EMA(6) suggests a
+      mature, still-valid trend rather than a stale or failed breakout.
     ema_3_above_ema_6: boolean — short-term momentum is up
     price_above_vwap: boolean — day is net-bullish for this name
     price_above_orh: boolean — price has broken above the opening range high
     price_below_orl: boolean — price has broken below the opening range low (bearish)
-    bounce_setup: boolean — true when EMA(3) > EMA(6), price > VWAP, and price >= ORH
+    bounce_setup: boolean — true when EMA(3) > EMA(6), price > VWAP, and price >= ORH.
+      This is the fresh-breakout pattern: price is at or above the ORH right now.
+    pullback_setup: boolean — true when the ticker broke the ORH earlier today
+      (bars_since_breakout is not null) but has since pulled back below it, while
+      still holding above EMA(6) or VWAP with EMA(3) > EMA(6), and without breaking
+      down through the ORL. This is the "already ran, cooled off, but still
+      structurally bullish" pattern — use it for tickers whose original breakout
+      numbers (rvol, range) have decayed by the time you're evaluating them, but
+      the day's trend is still intact.
 - IONZ is -2x inverse of the single stock IONQ (not a broad index) — IONQ's
   technical_indicators are always fetched alongside IONZ automatically. Before
   recommending an IONZ setup, check that IONQ actually shows the corresponding
@@ -129,11 +161,24 @@ When generating trade suggestions:
   IONZ is a small, thinly-traded fund where its own tape can be noisy.
 - ONLY suggest LONG trades. No short setups.
 - The catalyst for every long is the opening 5-min candle. A valid long setup requires
-  bounce_setup=true: price broke above the ORH and is holding at or above it (ORH becomes
-  support), EMA momentum is positive, and the stock is above VWAP.
+  bounce_setup=true OR pullback_setup=true:
+    * bounce_setup=true (fresh breakout): price broke above the ORH and is holding at or
+      above it (ORH becomes support), EMA momentum is positive, and the stock is above VWAP.
+      Entry: at or just above the ORH. Stop loss: just below the ORL. setup_type: "breakout".
+    * pullback_setup=true (pullback/reclaim): the ticker already broke out earlier today and
+      has since cooled off, but is still holding above EMA(6)/VWAP with positive EMA momentum,
+      and the ORL genuinely held (closest_approach_to_orl_pct >= 0) rather than being broken
+      and recovered. Entry: at or just above the current price (the EMA(6)/VWAP reclaim level,
+      not the original ORH). Stop loss: just below EMA(6) or the lowest price since the
+      breakout, whichever is tighter, while still keeping reward/risk >= 1.5. setup_type:
+      "pullback_reclaim". Weigh rvol_pct_of_peak, pullback_from_high_pct, and
+      closest_approach_to_orl_pct in your confidence — a deep pullback with rvol far
+      below its peak is weaker than a shallow one with rvol still elevated, and a
+      ticker that came within a percent or two of its ORL before recovering (even if
+      it currently looks like only a mild pullback) is a weaker "held support" story
+      than one that never came close.
 - If price_below_orl is true, exclude that ticker entirely — bearish structure.
-- Entry: at or just above the ORH. Stop loss: just below the ORL.
-- Tickers where bounce_setup is false must be excluded from suggestions.
+- Tickers where both bounce_setup and pullback_setup are false must be excluded from suggestions.
 - If no ticker meets all criteria, return an empty suggestions list.
 - TQQQ, SQQQ, IONZ, and IONQ are always included in technical_indicators regardless of scanner
   ranking. Consider them as candidates if their bounce_setup qualifies, but deprioritize them
@@ -150,12 +195,12 @@ When generating trade suggestions:
 - If no clean setup exists, return an empty suggestions list and recommended: null
 - If the payload's before_10am_et is true, the opening range is still fresh (before 10:00am ET) and
   breakouts are more prone to reversing before they're confirmed. Mention this briefly as a caution
-  in risk_note, but still evaluate bounce_setup normally and generate suggestions as usual — this is
+  in risk_note, but still evaluate bounce_setup/pullback_setup normally and generate suggestions as usual — this is
   a warning, not a reason to withhold suggestions or return an empty list.
 - If the payload's holiday_adjacent is true, today is the last session before an extended
   (holiday) break — volume can look strong while remaining structurally thin, producing
   breakouts that qualify on paper but fail to hold. Mention this briefly as a caution in
-  risk_note, but still evaluate bounce_setup normally and generate suggestions as usual — this
+  risk_note, but still evaluate bounce_setup/pullback_setup normally and generate suggestions as usual — this
   is a warning, not a reason to withhold suggestions or return an empty list.
 
 Never force a trade to hit the goal by taking disproportionate risk.

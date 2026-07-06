@@ -331,25 +331,26 @@ def get_daily_bars(ticker: str, from_date: str, to_date: str) -> list[dict]:
 # ── Technical indicators ──────────────────────────────────────────────────────
 
 
-def get_technical_indicators(tickers: list[str]) -> dict[str, dict]:
-    """5-min intraday indicators using the opening range candle as the catalyst.
-
-    Fetches today's 1-min bars for each ticker via Schwab price history, then
-    aggregates them into 5-min buckets for ORH/ORL/EMA(3)/EMA(6) — this keeps
-    those indicators' original 15-min/30-min lookback character (low noise)
-    while still giving RVOL access to finer-grained volume data than a single
-    5-min fetch would provide.
+def _compute_indicators_from_candles(candles: list[dict]) -> dict | None:
+    """Pure candle math extracted from get_technical_indicators() so it can be
+    unit tested with synthetic candles instead of requiring live market hours.
 
     bucket[0] (the first 5 one-min candles, 9:30-9:35am) is the opening range —
     its high/low are the Opening Range High (ORH) and Opening Range Low (ORL).
 
-    RVOL compares the latest 1-min candle's volume to a weighted average of
-    every prior 1-min candle today. Only the very first candle (the 9:30-9:31am
-    opening auction print, structurally the day's biggest single-minute volume
-    event) is down-weighted by half rather than excluded — candles 2-5 of the
-    opening range already trade like normal continuous flow and are kept at
-    full weight, giving a much fuller baseline early in the session than
-    excluding the whole opening range would.
+    RVOL compares a candle's volume to a weighted average of every prior 1-min
+    candle today. Only the very first candle (the 9:30-9:31am opening auction
+    print, structurally the day's biggest single-minute volume event) is
+    down-weighted by half rather than excluded — candles 2-5 of the opening
+    range already trade like normal continuous flow and are kept at full
+    weight, giving a much fuller baseline early in the session than excluding
+    the whole opening range would. peak_rvol/rvol_pct_of_peak recompute this
+    same formula at every candle since the ticker's own ORH breakout (not the
+    whole session) so the current reading can be read as "decayed from this
+    breakout's own volume" vs. "never had volume behind it" — the two look
+    identical from a single current rvol value alone. Scoping to since-breakout
+    (rather than a whole-day max) avoids an unrelated midday print elsewhere in
+    the session — a block trade, a halt reopen — swamping the signal.
 
     EMA(3) and EMA(6) seed with the first bucket's close (not an N-period SMA),
     matching how most charting platforms render EMA lines from the first bar
@@ -358,18 +359,190 @@ def get_technical_indicators(tickers: list[str]) -> dict[str, dict]:
     seed value) until enough bars have accumulated, which is expected EMA
     behavior, not a defect.
 
-    Runs all tickers in parallel. Skips tickers until the opening range itself
-    is complete (5 one-min candles, 9:30-9:35am) — ORH/ORL need that full
-    5-minute window to be a fixed, meaningful reference level.
+    bars_since_breakout/pullback_setup identify a second, later entry pattern:
+    a ticker that already broke the ORH earlier today, has since pulled back,
+    but is still holding above EMA(6)/VWAP with positive EMA momentum — as
+    distinct from bounce_setup, which only qualifies a ticker still at/above
+    the ORH right now. pullback_setup additionally requires
+    closest_approach_to_orl_pct >= 0 — the ORL must have actually held at its
+    worst point, not just been approached. price_below_orl alone isn't enough
+    to catch this: it only checks the *current* price, so a ticker that broke
+    below the ORL intraminute and has since recovered would otherwise still
+    qualify as if support had cleanly held.
 
-    Returns dict keyed by ticker:
+    Returns None if there aren't at least 5 candles yet (opening range not
+    complete). Otherwise returns:
     {
         orh, orl,                        # opening range high/low (9:30-9:35am)
-        ema_3, ema_6, vwap, rvol,
+        ema_3, ema_6, vwap, rvol, peak_rvol, rvol_pct_of_peak,
+        pullback_from_high_pct, closest_approach_to_orl_pct, bars_since_breakout,
         ema_3_above_ema_6, price_above_vwap,
         price_above_orh, price_below_orl,
-        current_price, bounce_setup
+        current_price, bounce_setup, pullback_setup
     }
+    """
+    if len(candles) < 5:
+        return None
+
+    # 5-min buckets from 1-min candles — preserves ORH/ORL/EMA's original
+    # lookback window. Last bucket may be partial (still-forming 5-min bar).
+    buckets = [candles[i : i + 5] for i in range(0, len(candles), 5)]
+
+    bucket_highs = [max(float(c["high"]) for c in b) for b in buckets]
+    bucket_closes = [float(b[-1]["close"]) for b in buckets]
+
+    orh = round(bucket_highs[0], 2)
+    orl = round(min(float(c["low"]) for c in buckets[0]), 2)
+
+    # EMA — seed with the first bucket's close (not an N-period SMA), then
+    # smooth forward. Always computable, even with just one bucket — early
+    # readings sit closer to the seed value until more bars accumulate,
+    # same convention most charting platforms (including Robinhood) use.
+    def _ema(period: int) -> float:
+        k = 2 / (period + 1)
+        val = bucket_closes[0]
+        for price in bucket_closes[1:]:
+            val = price * k + val * (1 - k)
+        return round(val, 4)
+
+    ema3 = _ema(3)
+    ema6 = _ema(6)
+
+    # VWAP and current price — computed on the raw 1-min series for precision
+    closes = [float(c["close"]) for c in candles]
+    highs = [float(c["high"]) for c in candles]
+    lows = [float(c["low"]) for c in candles]
+    vols = [float(c["volume"]) for c in candles]
+
+    total_vol = sum(vols)
+    vwap = (
+        round(
+            sum((highs[i] + lows[i] + closes[i]) / 3 * vols[i] for i in range(len(candles)))
+            / total_vol,
+            4,
+        )
+        if total_vol > 0
+        else None
+    )
+
+    current = closes[-1]
+
+    def _rvol_at(i: int) -> float | None:
+        """RVOL as of candle i — candle i's volume vs a weighted baseline of
+        every candle before it. Same formula as the original single-point rvol,
+        applied at every index so a peak can be tracked across the day."""
+        baseline_vols = vols[:i]
+        if not baseline_vols:
+            return None
+        weights = [0.5 if j == 0 else 1.0 for j in range(len(baseline_vols))]
+        baseline = sum(v * w for v, w in zip(baseline_vols, weights)) / sum(weights)
+        return round(vols[i] / baseline, 2) if baseline > 0 else None
+
+    rvol = _rvol_at(len(vols) - 1)
+
+    # First 5-min bucket after the opening range itself whose high broke the
+    # ORH. bucket[0] defines orh so it's excluded from this search.
+    breakout_bucket_idx = next((i for i in range(1, len(buckets)) if bucket_highs[i] > orh), None)
+    bars_since_breakout = (
+        (len(buckets) - 1) - breakout_bucket_idx if breakout_bucket_idx is not None else None
+    )
+
+    # peak_rvol is scoped to a fixed window right after this ticker's own
+    # breakout — the volume conviction of the breakout itself — rather than
+    # "anytime since." Most breakouts happen within the first bucket or two,
+    # so an open-ended since-breakout search still spans nearly the whole
+    # session and gets swamped by an unrelated print hours later (a block
+    # trade, a halt reopen) that has nothing to do with this setup. 15
+    # candles (~3 buckets / 15 minutes) bounds the search to the breakout's
+    # immediate volume thrust.
+    _PEAK_WINDOW_CANDLES = 15
+    peak_search_start = max(breakout_bucket_idx * 5, 1) if breakout_bucket_idx is not None else 1
+    peak_search_end = min(peak_search_start + _PEAK_WINDOW_CANDLES, len(vols))
+    rvol_series = [
+        r for i in range(peak_search_start, peak_search_end) if (r := _rvol_at(i)) is not None
+    ]
+    peak_rvol = max(rvol_series) if rvol_series else rvol
+    rvol_pct_of_peak = round(rvol / peak_rvol, 2) if rvol is not None and peak_rvol else None
+
+    high_since_open = max(highs)
+    pullback_from_high_pct = (
+        round((high_since_open - current) / high_since_open * 100, 2)
+        if high_since_open > 0
+        else None
+    )
+
+    # pullback_from_high_pct only reflects where price is *right now* vs. the
+    # day's high — it can't tell "drifted down smoothly" apart from "spiked,
+    # crashed to the edge of support, and clawed back to the same % off the
+    # high." closest_approach_to_orl_pct fills that gap: how close price got
+    # to the ORL at its worst point since the breakout, regardless of where
+    # it has since recovered to. A small or negative value means the level
+    # was genuinely tested (or briefly broken) even if the current snapshot
+    # looks calm.
+    closest_approach_to_orl_pct = (
+        round((min(lows[breakout_bucket_idx * 5 :]) - orl) / orl * 100, 2)
+        if breakout_bucket_idx is not None and orl > 0
+        else None
+    )
+
+    price_above_orh = current > orh
+    price_below_orl = current < orl
+    ema_3_above_ema_6 = ema3 > ema6
+    price_above_vwap = vwap is not None and current > vwap
+    bounce_setup = ema_3_above_ema_6 and vwap is not None and current > vwap and current >= orh
+
+    pullback_setup = (
+        bars_since_breakout is not None
+        and not bounce_setup
+        and not price_below_orl
+        and ema_3_above_ema_6
+        and (current >= ema6 or price_above_vwap)
+        # the ORL must have actually held, not just been approached — a ticker
+        # that broke below it intraminute and recovered is a structural
+        # breakdown-and-bounce, not a "support held" continuation, even
+        # though price_below_orl (current only) no longer shows it
+        and closest_approach_to_orl_pct is not None
+        and closest_approach_to_orl_pct >= 0
+    )
+
+    return {
+        "orh": orh,
+        "orl": orl,
+        "ema_3": ema3,
+        "ema_6": ema6,
+        "vwap": vwap,
+        "rvol": rvol,
+        "peak_rvol": peak_rvol,
+        "rvol_pct_of_peak": rvol_pct_of_peak,
+        "pullback_from_high_pct": pullback_from_high_pct,
+        "closest_approach_to_orl_pct": closest_approach_to_orl_pct,
+        "bars_since_breakout": bars_since_breakout,
+        "current_price": round(current, 2),
+        "ema_3_above_ema_6": ema_3_above_ema_6,
+        "price_above_vwap": price_above_vwap,
+        "price_above_orh": price_above_orh,
+        "price_below_orl": price_below_orl,
+        "bounce_setup": bounce_setup,
+        "pullback_setup": pullback_setup,
+    }
+
+
+def get_technical_indicators(tickers: list[str]) -> dict[str, dict]:
+    """5-min intraday indicators using the opening range candle as the catalyst.
+
+    Fetches today's 1-min bars for each ticker via Schwab price history, then
+    hands them to _compute_indicators_from_candles() for the actual math. Runs
+    all tickers in parallel. Skips tickers until the opening range itself is
+    complete (5 one-min candles, 9:30-9:35am) — ORH/ORL need that full 5-minute
+    window to be a fixed, meaningful reference level.
+
+    need_extended_hours_data=False is required here — without it Schwab
+    silently includes pre-market candles ahead of the requested start_datetime
+    (observed starting as early as 7:00am ET), which shifts bucket[0] off the
+    real 9:30-9:35am opening range and corrupts every field derived from
+    orh/orl (bounce_setup, pullback_setup, price_above_orh, etc.).
+
+    See _compute_indicators_from_candles() for the full field list.
     """
     if not tickers:
         return {}
@@ -385,87 +558,11 @@ def get_technical_indicators(tickers: list[str]) -> dict[str, dict]:
                 start_datetime=start,
                 end_datetime=end,
                 need_previous_close=False,
+                need_extended_hours_data=False,
             )
             resp.raise_for_status()
             candles = resp.json().get("candles", [])
-            if len(candles) < 5:
-                return ticker, None
-
-            # 5-min buckets from 1-min candles — preserves ORH/ORL/EMA's original
-            # lookback window. Last bucket may be partial (still-forming 5-min bar).
-            buckets = [candles[i : i + 5] for i in range(0, len(candles), 5)]
-
-            bucket_highs = [max(float(c["high"]) for c in b) for b in buckets]
-            bucket_lows = [min(float(c["low"]) for c in b) for b in buckets]
-            bucket_closes = [float(b[-1]["close"]) for b in buckets]
-
-            orh = round(bucket_highs[0], 2)
-            orl = round(bucket_lows[0], 2)
-
-            # EMA — seed with the first bucket's close (not an N-period SMA), then
-            # smooth forward. Always computable, even with just one bucket — early
-            # readings sit closer to the seed value until more bars accumulate,
-            # same convention most charting platforms (including Robinhood) use.
-            def _ema(period: int) -> float:
-                k = 2 / (period + 1)
-                val = bucket_closes[0]
-                for price in bucket_closes[1:]:
-                    val = price * k + val * (1 - k)
-                return round(val, 4)
-
-            ema3 = _ema(3)
-            ema6 = _ema(6)
-
-            # VWAP and current price — computed on the raw 1-min series for precision
-            closes = [float(c["close"]) for c in candles]
-            highs = [float(c["high"]) for c in candles]
-            lows = [float(c["low"]) for c in candles]
-            vols = [float(c["volume"]) for c in candles]
-
-            total_vol = sum(vols)
-            vwap = (
-                round(
-                    sum((highs[i] + lows[i] + closes[i]) / 3 * vols[i] for i in range(len(candles)))
-                    / total_vol,
-                    4,
-                )
-                if total_vol > 0
-                else None
-            )
-
-            current = closes[-1]
-
-            # RVOL — current 1-min candle vs a weighted baseline of every prior
-            # 1-min candle today. Only the very first candle (9:30-9:31am, the
-            # opening auction print) is down-weighted rather than excluded — it's
-            # a genuine outlier since the opening cross concentrates pent-up
-            # orders into one discrete print, but candles 2-5 of the opening
-            # range already trade more like normal continuous flow and carry
-            # real baseline signal worth keeping.
-            baseline_vols = vols[:-1]
-            if baseline_vols:
-                weights = [0.5 if i == 0 else 1.0 for i in range(len(baseline_vols))]
-                baseline = sum(v * w for v, w in zip(baseline_vols, weights)) / sum(weights)
-                rvol = round(vols[-1] / baseline, 2) if baseline > 0 else None
-            else:
-                rvol = None
-
-            return ticker, {
-                "orh": orh,
-                "orl": orl,
-                "ema_3": ema3,
-                "ema_6": ema6,
-                "vwap": vwap,
-                "rvol": rvol,
-                "current_price": round(current, 2),
-                "ema_3_above_ema_6": ema3 > ema6,
-                "price_above_vwap": vwap is not None and current > vwap,
-                "price_above_orh": current > orh,
-                "price_below_orl": current < orl,
-                "bounce_setup": (
-                    ema3 > ema6 and vwap is not None and current > vwap and current >= orh
-                ),
-            }
+            return ticker, _compute_indicators_from_candles(candles)
         except Exception:
             logger.exception("schwab get_technical_indicators failed for ticker %s", ticker)
             return ticker, None
