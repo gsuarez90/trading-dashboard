@@ -35,5 +35,5 @@ def test_before_10am_false_midday():
     assert _is_before_10am_et(_et(2026, 7, 6, 13, 0)) is False
 
 
-def test_pinned_tickers_include_tqqq_sqqq_ionz_ionq_and_nvda():
-    assert set(_PINNED_TICKERS) == {"TQQQ", "SQQQ", "IONZ", "IONQ", "NVDA"}
+def test_pinned_tickers_include_tqqq_sqqq_ionz_ionq_nvda_and_spcx():
+    assert set(_PINNED_TICKERS) == {"TQQQ", "SQQQ", "IONZ", "IONQ", "NVDA", "SPCX"}
