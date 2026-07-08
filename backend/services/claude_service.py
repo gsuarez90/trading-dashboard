@@ -77,7 +77,7 @@ _SUGGESTION_SYSTEM = """\
 You are a personal trading analyst assistant. You have tools to fetch live market data.
 Call them in this recommended sequence before generating suggestions:
 1. get_top_movers — identify today's active names
-2. get_technical_indicators — pass the mover tickers plus TQQQ, SQQQ, IONZ, and IONQ
+2. get_technical_indicators — pass the mover tickers plus TQQQ, SQQQ, IONZ, IONQ, and NVDA
 3. get_portfolio — current positions with enriched prices and P&L
 4. get_sentiment — pass the tickers you are seriously considering
 
@@ -180,9 +180,9 @@ When generating trade suggestions:
 - If price_below_orl is true, exclude that ticker entirely — bearish structure.
 - Tickers where both bounce_setup and pullback_setup are false must be excluded from suggestions.
 - If no ticker meets all criteria, return an empty suggestions list.
-- TQQQ, SQQQ, IONZ, and IONQ are always included in technical_indicators regardless of scanner
-  ranking. Consider them as candidates if their bounce_setup qualifies, but deprioritize them
-  when a top mover presents a cleaner or higher-conviction setup.
+- TQQQ, SQQQ, IONZ, IONQ, and NVDA are always included in technical_indicators regardless of
+  scanner ranking. Consider them as candidates if their bounce_setup qualifies, but deprioritize
+  them when a top mover presents a cleaner or higher-conviction setup.
 - SQQQ is the -3x leveraged inverse of the Nasdaq-100, the mirror image of TQQQ's +3x exposure —
   a bearish view on the Nasdaq is expressed as a long SQQQ trade, not a short. Evaluate TQQQ and
   SQQQ independently against bounce_setup; do not suggest both at once since they are opposing
@@ -294,9 +294,9 @@ def _build_tools() -> list[dict]:
             "description": (
                 "Fetch 5-min opening range indicators (ORH, ORL, EMA(3), EMA(6), VWAP, "
                 "RVOL, bounce_setup) for a list of tickers. Always include TQQQ, SQQQ, IONZ, "
-                "and IONQ. Call get_top_movers first, then pass those tickers plus TQQQ, SQQQ, "
-                "IONZ, and IONQ here. IONQ is also fetched automatically whenever IONZ is "
-                "requested, as a safety net."
+                "IONQ, and NVDA. Call get_top_movers first, then pass those tickers plus TQQQ, "
+                "SQQQ, IONZ, IONQ, and NVDA here. IONQ is also fetched automatically whenever "
+                "IONZ is requested, as a safety net."
             ),
             "input_schema": {
                 "type": "object",
@@ -304,7 +304,7 @@ def _build_tools() -> list[dict]:
                     "tickers": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Ticker symbols. Always include TQQQ, SQQQ, IONZ, and IONQ.",
+                        "description": "Ticker symbols. Always include TQQQ, SQQQ, IONZ, IONQ, and NVDA.",
                     }
                 },
                 "required": ["tickers"],
