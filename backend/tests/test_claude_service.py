@@ -105,3 +105,77 @@ def test_guardrail_names_includes_option_checks():
     assert "option_liquidity_check" in claude_service._GUARDRAIL_NAMES
     assert "expiration_proximity" in claude_service._GUARDRAIL_NAMES
     assert len(claude_service._GUARDRAIL_NAMES) == 10
+
+
+# ── Regression: instrument_type must be a declared, required schema field ────
+# Bug found live (2026-07-13): the tool schemas never declared instrument_type
+# as a property, so Claude never included it in its output, and Pydantic's
+# discriminated union (TradeSetupAny) couldn't tell suggestions.0 was an
+# option — "Unable to extract tag using discriminator 'instrument_type'".
+# The discriminator only works if the schema Claude is given actually asks
+# for the tag; a default value on the Pydantic model is not enough, because
+# discrimination happens before defaults are applied.
+
+
+def test_trade_setup_schema_declares_instrument_type():
+    assert "instrument_type" in claude_service._TRADE_SETUP_SCHEMA["properties"]
+    assert claude_service._TRADE_SETUP_SCHEMA["properties"]["instrument_type"]["enum"] == ["equity"]
+    assert "instrument_type" in claude_service._TRADE_SETUP_SCHEMA["required"]
+
+
+def test_option_trade_setup_schema_declares_instrument_type():
+    schema = claude_service._OPTION_TRADE_SETUP_SCHEMA
+    assert "instrument_type" in schema["properties"]
+    assert schema["properties"]["instrument_type"]["enum"] == ["option"]
+    assert "instrument_type" in schema["required"]
+
+
+def test_suggestion_response_round_trip_discriminates_option_from_tool_output():
+    """End-to-end proof the discriminator actually works — validates a dict
+    shaped exactly like what Claude's forced tool call would return (no
+    instrument_type omitted), matching the live bug's INTC example."""
+    from models.schemas import OptionTradeSetup, TradeSuggestionResponse
+
+    option_dict = {
+        "instrument_type": "option",
+        "ticker": "INTC",
+        "option_symbol": "INTC  260821C00027000",
+        "option_type": "call",
+        "strike_price": 27.0,
+        "expiration_date": "2026-08-21",
+        "days_to_expiration": 14,
+        "trade_type": "intraday_cash",
+        "profit_mode": "cash_intraday",
+        "entry_price": 1.20,
+        "target_price": 1.80,
+        "stop_loss": 0.78,
+        "shares": 20,
+        "breakeven_price": 0.0,
+        "delta_at_entry": 0.5,
+        "implied_volatility_at_entry": 40.0,
+        "bid_ask_spread_pct": 5.0,
+        "open_interest": 500,
+        "volume": 200,
+        "underlying_price_at_entry": 27.0,
+        "expected_gain": 0.0,
+        "max_loss": 0.0,
+        "reward_risk_ratio": 0.0,
+        "confidence": "medium",
+        "rationale": "Clean breakout",
+        "setup_type": "breakout",
+        "robinhood_instructions": "Buy to open, sell to close immediately.",
+    }
+    response = TradeSuggestionResponse(
+        goal=100.0,
+        profit_mode="cash_intraday",
+        trade_scope="holdings_only",
+        suggestions=[option_dict],
+        risk_note="",
+        market_conditions="",
+        intraday_viability=None,
+        recommended=option_dict,
+        guardrails_checked=[],
+        any_guardrail_triggered=False,
+    )
+    assert isinstance(response.suggestions[0], OptionTradeSetup)
+    assert isinstance(response.recommended, OptionTradeSetup)

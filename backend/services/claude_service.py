@@ -442,6 +442,7 @@ def _build_tools(include_options: bool = False) -> list[dict]:
 _TRADE_SETUP_SCHEMA = {
     "type": "object",
     "properties": {
+        "instrument_type": {"type": "string", "enum": ["equity"]},
         "ticker": {"type": "string"},
         "direction": {"type": "string", "enum": ["long", "short"]},
         "trade_type": {"type": "string", "enum": ["intraday_cash", "swing", "partial_trim"]},
@@ -465,6 +466,7 @@ _TRADE_SETUP_SCHEMA = {
         "ml_calibration_note": {"type": ["string", "null"]},
     },
     "required": [
+        "instrument_type",
         "ticker",
         "direction",
         "trade_type",
@@ -492,6 +494,7 @@ _TRADE_SETUP_SCHEMA = {
 _OPTION_TRADE_SETUP_SCHEMA = {
     "type": "object",
     "properties": {
+        "instrument_type": {"type": "string", "enum": ["option"]},
         "ticker": {"type": "string"},
         "option_symbol": {"type": "string"},
         "option_type": {"type": "string", "enum": ["call", "put"]},
@@ -520,6 +523,7 @@ _OPTION_TRADE_SETUP_SCHEMA = {
         "robinhood_instructions": {"type": "string"},
     },
     "required": [
+        "instrument_type",
         "ticker",
         "option_symbol",
         "option_type",
