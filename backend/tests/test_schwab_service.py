@@ -19,7 +19,6 @@ load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env.local")
 
 from services import schwab_service
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 SINGLE_TICKER = "AAPL"
@@ -153,3 +152,44 @@ def test_get_daily_bars_invalid_ticker():
     """Invalid ticker should return empty list, not raise."""
     bars = schwab_service.get_daily_bars("INVALIDXYZ999", FROM_DATE, TO_DATE)
     assert isinstance(bars, list)
+
+
+# ── Options (intraday-options-pivot-plan.md, options-trade-suggestions-plan.md) ──
+
+
+def test_get_option_chain_returns_contracts():
+    contracts = schwab_service.get_option_chain(SINGLE_TICKER)
+    assert isinstance(contracts, list)
+    assert len(contracts) > 0, "Expected at least one option contract back"
+    for c in contracts:
+        assert c["option_type"] in ("call", "put")
+        assert c["strike_price"] > 0
+        assert c["days_to_expiration"] >= 0
+
+
+def test_get_option_chain_respects_dte_floor_and_ceiling():
+    contracts = schwab_service.get_option_chain(SINGLE_TICKER, min_dte=7, max_dte=21)
+    for c in contracts:
+        assert 0 <= c["days_to_expiration"] <= 21
+
+
+def test_get_option_chain_includes_both_call_and_put():
+    contracts = schwab_service.get_option_chain(SINGLE_TICKER)
+    option_types = {c["option_type"] for c in contracts}
+    assert option_types == {"call", "put"}
+
+
+def test_get_option_quotes_returns_prices():
+    contracts = schwab_service.get_option_chain(SINGLE_TICKER)
+    sample_symbols = [c["symbol"] for c in contracts[:2]]
+    results = schwab_service.get_option_quotes(sample_symbols)
+    assert isinstance(results, list)
+    assert len(results) > 0
+    for q in results:
+        assert "option_symbol" in q
+        assert "price" in q
+        assert q["price"] > 0
+
+
+def test_get_option_quotes_empty_input():
+    assert schwab_service.get_option_quotes([]) == []

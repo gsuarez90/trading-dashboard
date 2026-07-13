@@ -654,3 +654,139 @@ def get_technical_indicators(tickers: list[str]) -> dict[str, dict]:
             if data is not None:
                 results[ticker] = data
     return results
+
+
+# ── Options (intraday-options-pivot-plan.md, options-trade-suggestions-plan.md) ──
+
+_OPTION_STRIKES_AROUND_ATM = 6
+
+
+def _normalize_option_contract(contract: dict, option_type: str) -> dict:
+    """Flattens one raw Schwab option-chain contract into the field set
+    OptionTradeSetup needs. Field names below (bid/ask/mark/totalVolume/
+    volatility/openInterest/strikePrice/expirationDate/daysToExpiration/
+    breakEven/inTheMoney) are confirmed against a real response —
+    scripts/test_option_chain_live.py, run 2026-07-13.
+    """
+    bid = contract.get("bid")
+    ask = contract.get("ask")
+    bid_ask_spread_pct = None
+    if bid is not None and ask is not None:
+        mid = (bid + ask) / 2
+        if mid > 0:
+            bid_ask_spread_pct = round((ask - bid) / mid * 100, 2)
+
+    expiration_date = contract.get("expirationDate")
+    if expiration_date:
+        expiration_date = expiration_date.split("T")[0]
+
+    return {
+        "symbol": contract.get("symbol"),
+        "option_type": option_type,
+        "strike_price": float(contract["strikePrice"]),
+        "expiration_date": expiration_date,
+        "days_to_expiration": int(contract.get("daysToExpiration", 0)),
+        "bid": bid,
+        "ask": ask,
+        "last": contract.get("last"),
+        "mark": contract.get("mark"),
+        "volume": contract.get("totalVolume"),
+        "open_interest": contract.get("openInterest"),
+        "delta": contract.get("delta"),
+        "gamma": contract.get("gamma"),
+        "theta": contract.get("theta"),
+        "vega": contract.get("vega"),
+        "implied_volatility": contract.get("volatility"),
+        "breakeven_price": contract.get("breakEven"),
+        "in_the_money": contract.get("inTheMoney"),
+        "bid_ask_spread_pct": bid_ask_spread_pct,
+    }
+
+
+def get_option_chain(
+    ticker: str,
+    min_dte: int | None = None,
+    max_dte: int | None = None,
+    strikes_around_atm: int = _OPTION_STRIKES_AROUND_ATM,
+) -> list[dict]:
+    """Real Schwab option-chain contracts (calls and puts) for a ticker,
+    normalized to a flat list of dicts — one per contract.
+
+    Schwab's raw response nests contracts by expiration then strike
+    (callExpDateMap/putExpDateMap); this flattens that into what
+    OptionTradeSetup needs, via _normalize_option_contract().
+
+    min_dte/max_dte default to the OPTION_MIN_DTE/OPTION_MAX_DTE env vars
+    (SSM plain params in Lambda, .env.local locally — same pattern as
+    DAILY_LOSS_LIMIT/MAX_POSITION_SIZE_PCT), read fresh at call time rather
+    than cached at import, so the same config the guardrail_service.py
+    expiration_proximity check enforces also governs what gets fetched
+    here — one source of truth instead of two hardcoded numbers that could
+    drift apart. Falls back to 7/21 — the options pivot's decided
+    expiration floor/ceiling (intraday-options-pivot-plan.md §1, §6).
+    """
+    if min_dte is None:
+        min_dte = int(os.environ.get("OPTION_MIN_DTE", 7))
+    if max_dte is None:
+        max_dte = int(os.environ.get("OPTION_MAX_DTE", 21))
+
+    today = datetime.now(tz=ET)
+    from_date = today + timedelta(days=min_dte)
+    to_date = today + timedelta(days=max_dte)
+
+    resp = _get_client().get_option_chain(
+        ticker,
+        contract_type=schwab.client.Client.Options.ContractType.ALL,
+        strike_count=strikes_around_atm,
+        strike_range=schwab.client.Client.Options.StrikeRange.NEAR_THE_MONEY,
+        from_date=from_date,
+        to_date=to_date,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    contracts = []
+    for exp_date_map_key, option_type in (("callExpDateMap", "call"), ("putExpDateMap", "put")):
+        for strikes in data.get(exp_date_map_key, {}).values():
+            for entries in strikes.values():
+                for contract in entries:
+                    contracts.append(_normalize_option_contract(contract, option_type))
+    return contracts
+
+
+def get_option_quotes(option_symbols: list[str]) -> list[dict]:
+    """Real-time premium quotes for OCC-format option symbols — used by the
+    price monitor to check a held option's target/stop against its live
+    premium.
+
+    Confirmed via scripts/test_option_chain_live.py (2026-07-13) that
+    client.get_quotes() accepts option OCC symbols directly, with the same
+    quote field names (lastPrice/mark) as equities — same call shape as
+    get_batch_quotes(), just keyed by option symbol instead of ticker.
+    """
+    if not option_symbols:
+        return []
+
+    resp = _get_client().get_quotes(option_symbols)
+    resp.raise_for_status()
+    data = resp.json()
+
+    results = []
+    for symbol in option_symbols:
+        entry = data.get(symbol, {})
+        quote = entry.get("quote", {})
+        price = quote.get("mark") or quote.get("lastPrice")
+        if price is None:
+            continue
+        results.append({"option_symbol": symbol, "price": round(float(price), 2)})
+    return results
+
+
+def closest_listed_strike(target_price: float, available_strikes: list[float]) -> float:
+    """Nearest strike Schwab actually lists, given a computed target price.
+
+    Strike increments vary by underlying price (e.g. $0.50 near $50, $5 near
+    $500) — rather than hardcode an increment table, pick from the real
+    strikes a get_option_chain() call already returned.
+    """
+    return min(available_strikes, key=lambda strike: abs(strike - target_price))
