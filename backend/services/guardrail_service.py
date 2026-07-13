@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
-from models.schemas import TradeSetup
+from models.schemas import TradeSetupAny
 from services import dynamo_service
 
 ET = ZoneInfo("America/New_York")
@@ -43,7 +43,10 @@ class GuardrailResult:
 
 
 def _check_daily_loss_limit(trade, ctx: GuardrailContext) -> tuple[bool, str]:
-    limit = float(os.environ.get("DAILY_LOSS_LIMIT", 200))
+    # $1,500 default (up from equity-only $200) — sized for $5k-$10k option
+    # positions under the options pivot (intraday-options-pivot-plan.md §1).
+    # Shared counter across equity and option trades, not per-instrument.
+    limit = float(os.environ.get("DAILY_LOSS_LIMIT", 1500))
     if ctx.realized_pnl_today <= -limit:
         return True, (
             f"Daily loss limit reached "
@@ -52,10 +55,10 @@ def _check_daily_loss_limit(trade, ctx: GuardrailContext) -> tuple[bool, str]:
     return False, ""
 
 
-def _check_position_size(trade: TradeSetup, ctx: GuardrailContext) -> tuple[bool, str]:
+def _check_position_size(trade, ctx: GuardrailContext) -> tuple[bool, str]:
     max_pct = float(os.environ.get("MAX_POSITION_SIZE_PCT", 20)) / 100
     max_allowed = ctx.cash * max_pct
-    position_value = trade.entry_price * trade.shares
+    position_value = trade.entry_price * trade.shares * trade.multiplier
     if position_value > max_allowed:
         return True, (
             f"Position ${position_value:.2f} exceeds "
@@ -64,7 +67,7 @@ def _check_position_size(trade: TradeSetup, ctx: GuardrailContext) -> tuple[bool
     return False, ""
 
 
-def _check_cost_basis(trade: TradeSetup, ctx: GuardrailContext) -> tuple[bool, str]:
+def _check_cost_basis(trade: TradeSetupAny, ctx: GuardrailContext) -> tuple[bool, str]:
     if not trade.uses_existing_holding:
         return False, ""
     if ctx.allow_loss:
@@ -79,7 +82,7 @@ def _check_cost_basis(trade: TradeSetup, ctx: GuardrailContext) -> tuple[bool, s
     return False, ""
 
 
-def _check_reward_risk(trade: TradeSetup, ctx: GuardrailContext) -> tuple[bool, str]:
+def _check_reward_risk(trade: TradeSetupAny, ctx: GuardrailContext) -> tuple[bool, str]:
     if trade.reward_risk_ratio < 1.5:
         return True, (f"Reward/risk {trade.reward_risk_ratio:.2f} is below minimum 1.5")
     return False, ""
@@ -89,7 +92,12 @@ def _check_daily_trade_limit(trade, ctx: GuardrailContext) -> tuple[bool, str]:
     # PDT rule does not apply when account equity exceeds $25k — set PDT_EXEMPT=true in SSM
     if os.environ.get("PDT_EXEMPT", "false").lower() == "true":
         return False, ""
-    limit = int(os.environ.get("DAILY_TRADE_LIMIT", 3))
+    # 2 default (down from 3) — options pivot decision (§1, §8 Q7). One
+    # shared counter across equity and option trades, not per-instrument —
+    # at $5k-$10k per option trade, a single full-sized loss can already
+    # consume most of the daily_loss_limit budget, so "2" functions as a
+    # ceiling more than a guarantee of two independent full-sized attempts.
+    limit = int(os.environ.get("DAILY_TRADE_LIMIT", 2))
     if ctx.trade_count_today >= limit:
         return True, f"Daily trade limit reached ({ctx.trade_count_today}/{limit})"
     return False, ""
@@ -108,7 +116,7 @@ def _check_market_hours(trade, ctx: GuardrailContext) -> tuple[bool, str]:
     return False, ""
 
 
-def _check_intraday_cutoff(trade: TradeSetup, ctx: GuardrailContext) -> tuple[bool, str]:
+def _check_intraday_cutoff(trade: TradeSetupAny, ctx: GuardrailContext) -> tuple[bool, str]:
     if trade.trade_type != "intraday_cash":
         return False, ""
     now_et = ctx.current_et()
@@ -117,11 +125,49 @@ def _check_intraday_cutoff(trade: TradeSetup, ctx: GuardrailContext) -> tuple[bo
     return False, ""
 
 
-def _check_buying_power(trade: TradeSetup, ctx: GuardrailContext) -> tuple[bool, str]:
-    position_value = trade.entry_price * trade.shares
+def _check_buying_power(trade, ctx: GuardrailContext) -> tuple[bool, str]:
+    position_value = trade.entry_price * trade.shares * trade.multiplier
     if position_value > ctx.cash:
         return True, (
             f"Insufficient cash — need ${position_value:.2f}, " f"available ${ctx.cash:.2f}"
+        )
+    return False, ""
+
+
+def _check_option_liquidity(trade, ctx: GuardrailContext) -> tuple[bool, str]:
+    """No-ops for equity trades. Wide spreads/thin open interest produce
+    unrealistic paper-trade fills and are unrealistic to execute live —
+    options-trade-suggestions-plan.md §3.7."""
+    if trade.instrument_type != "option":
+        return False, ""
+    max_spread_pct = float(os.environ.get("OPTION_MAX_SPREAD_PCT", 15))
+    min_open_interest = int(os.environ.get("OPTION_MIN_OPEN_INTEREST", 50))
+    if trade.bid_ask_spread_pct is not None and trade.bid_ask_spread_pct > max_spread_pct:
+        return True, (
+            f"Bid-ask spread {trade.bid_ask_spread_pct:.1f}% exceeds " f"{max_spread_pct:.0f}% max"
+        )
+    if trade.open_interest is not None and trade.open_interest < min_open_interest:
+        return True, f"Open interest {trade.open_interest} below minimum {min_open_interest}"
+    return False, ""
+
+
+def _check_expiration_proximity(trade, ctx: GuardrailContext) -> tuple[bool, str]:
+    """No-ops for equity trades. Enforces both the options pivot's 7-day
+    min-DTE floor (gentle enough theta/gamma for a setup that takes 20-40
+    minutes to confirm, even though the position exits same-day regardless)
+    and its ~3-week max-DTE ceiling (keeps cash_intraday distinct from a
+    future swing-mode option) — intraday-options-pivot-plan.md §1, §6."""
+    if trade.instrument_type != "option":
+        return False, ""
+    min_dte = int(os.environ.get("OPTION_MIN_DTE", 7))
+    max_dte = int(os.environ.get("OPTION_MAX_DTE", 21))
+    if trade.days_to_expiration < min_dte:
+        return True, (
+            f"{trade.days_to_expiration} days to expiration is below the " f"{min_dte}-day minimum"
+        )
+    if trade.days_to_expiration > max_dte:
+        return True, (
+            f"{trade.days_to_expiration} days to expiration exceeds the " f"{max_dte}-day maximum"
         )
     return False, ""
 
@@ -137,11 +183,13 @@ _CHECKS = [
     ("market_hours_lock", _check_market_hours),
     ("intraday_30min_cutoff", _check_intraday_cutoff),
     ("buying_power_check", _check_buying_power),
+    ("option_liquidity_check", _check_option_liquidity),
+    ("expiration_proximity", _check_expiration_proximity),
 ]
 
 
-def check_all(trade: TradeSetup, ctx: GuardrailContext) -> GuardrailResult:
-    """Run all 8 guardrails. Same code path for paper and live trading."""
+def check_all(trade: TradeSetupAny, ctx: GuardrailContext) -> GuardrailResult:
+    """Run all 10 guardrails. Same code path for paper and live trading."""
     triggered = []
     messages = []
     for name, fn in _CHECKS:
@@ -154,8 +202,8 @@ def check_all(trade: TradeSetup, ctx: GuardrailContext) -> GuardrailResult:
 
 def get_status(ctx: GuardrailContext) -> dict:
     """Returns current guardrail status without a specific trade — used by the dashboard."""
-    limit = float(os.environ.get("DAILY_LOSS_LIMIT", 200))
-    trade_limit = int(os.environ.get("DAILY_TRADE_LIMIT", 3))
+    limit = float(os.environ.get("DAILY_LOSS_LIMIT", 1500))
+    trade_limit = int(os.environ.get("DAILY_TRADE_LIMIT", 2))
     pdt_exempt = os.environ.get("PDT_EXEMPT", "false").lower() == "true"
     now_et = ctx.current_et()
     t = now_et.time()
