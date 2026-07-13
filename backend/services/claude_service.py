@@ -28,6 +28,8 @@ _GUARDRAIL_NAMES = [
     "market_hours_lock",
     "intraday_30min_cutoff",
     "buying_power_check",
+    "option_liquidity_check",
+    "expiration_proximity",
 ]
 
 _BRIEFING_SYSTEM = """\
@@ -73,6 +75,62 @@ Never suggest selling below cost basis unless allow_loss is true.
 Plain text only, no markdown.\
 """
 
+# ── Options pivot (intraday-options-pivot-plan.md) — config-gated prompt sections ──
+# INCLUDE_OPTIONS_SUGGESTIONS=false (default): bearish structure is still a hard
+# exclude, exactly like before this pivot. =true: bearish structure qualifies for
+# a shadow long-put suggestion instead, and get_option_chain becomes available.
+# Phase 0 (shadow mode) keeps `suggestions`/`recommended` equity-only either way —
+# only `shadow_option_suggestions` differs.
+
+_BEARISH_HANDLING_EQUITY_ONLY = """\
+- If price_below_orl is true, exclude that ticker entirely — bearish structure.
+- Tickers where both bounce_setup and pullback_setup are false must be excluded from suggestions.\
+"""
+
+_BEARISH_HANDLING_WITH_OPTIONS = """\
+- If price_below_orl is true, this is bearish structure — check breakdown_setup/pulldown_setup:
+  if either is true, this ticker qualifies for a SHADOW long PUT suggestion (see "Shadow option
+  suggestions" below), never an equity suggestion. Do NOT add it to `suggestions` — bearish
+  tickers never appear there, only in `shadow_option_suggestions`.
+- Tickers where both bounce_setup and pullback_setup are false must be excluded from
+  `suggestions` (equity longs). They may still qualify for a shadow put if breakdown_setup or
+  pulldown_setup is true — see below.
+- Tickers where none of bounce_setup/pullback_setup/breakdown_setup/pulldown_setup are true must
+  be excluded entirely, from both `suggestions` and `shadow_option_suggestions`.\
+"""
+
+_SHADOW_OPTION_SECTION = """
+Shadow option suggestions (calibration only, not yet an acted-on recommendation):
+- For EVERY ticker that qualifies under `suggestions` (bounce_setup or pullback_setup) OR
+  qualifies bearish (breakdown_setup or pulldown_setup), also generate the option-equivalent
+  trade and place it in `shadow_option_suggestions` — a long call for a bullish qualifier, a
+  long put for a bearish qualifier. This never affects `recommended` or `suggestions` — those
+  stay equity-only and unchanged during this calibration period.
+- Call get_option_chain(ticker) to source real strikes, premiums, and Greeks — never invent
+  option prices. Select the strike closest to a 0.40-0.60 delta (near-the-money) from what
+  get_option_chain actually returns.
+- Only use expirations get_option_chain already returned — it only queries the 7-21 day
+  window, so every contract you see already clears the floor/ceiling.
+- Size contracts to a $1,000-$6,000 target capital band (scale toward $6k for high
+  confidence, toward $1k for lower confidence): contracts = floor(target_dollars /
+  (premium * 100)).
+- Stop loss at approximately -35% of entry premium; pick a target premium that keeps
+  reward_risk_ratio >= 1.5 (same minimum as equity).
+- multiplier is always 100. breakeven_price, expected_gain, max_loss, and reward_risk_ratio
+  are recomputed server-side from your prices — report your best estimate, it will be
+  corrected automatically.
+- robinhood_instructions must say "buy to open" at entry and "sell to close" at exit — never
+  "exercise" — same 3:45pm alarm reminder pattern as equities.
+- setup_type: "breakout" or "pullback_reclaim" (mirroring the bullish equity setup_type) for a
+  call, "breakdown" or "pulldown_reclaim" for a put.
+"""
+
+_OPTION_CHAIN_STEP = """\
+5. get_option_chain — only once a ticker has already qualified via technical_indicators \
+(bullish or bearish) and you're ready to generate its shadow option suggestion. Never call \
+this to explore randomly.
+"""
+
 _SUGGESTION_SYSTEM = """\
 You are a personal trading analyst assistant. You have tools to fetch live market data.
 Call them in this recommended sequence before generating suggestions:
@@ -80,7 +138,7 @@ Call them in this recommended sequence before generating suggestions:
 2. get_technical_indicators — pass the mover tickers plus TQQQ, SQQQ, IONZ, IONQ, NVDA, and SPCX
 3. get_portfolio — current positions with enriched prices and P&L
 4. get_sentiment — pass the tickers you are seriously considering
-
+{option_chain_step}
 Only call get_quotes or get_scanner_results if you need additional data.
 
 Current settings:
@@ -153,13 +211,37 @@ When generating trade suggestions:
       structurally bullish" pattern — use it for tickers whose original breakout
       numbers (rvol, range) have decayed by the time you're evaluating them, but
       the day's trend is still intact.
+    breakdown_setup: boolean — the bearish mirror of bounce_setup: true when
+      EMA(3) < EMA(6), price < VWAP, and price <= ORL. This is the fresh-breakdown
+      pattern: price is at or below the ORL right now (ORL becomes resistance on a
+      failed retest, mirroring "ORH becomes support" for bounce_setup).
+    pulldown_setup: boolean — the bearish mirror of pullback_setup: true when the
+      ticker broke down through the ORL earlier today (bars_since_breakdown is not
+      null) but has since bounced partway back up, while still holding below EMA(6)
+      or VWAP with EMA(3) < EMA(6), and without reclaiming back above the ORH. This
+      is the "already broke down, bounced, but still structurally bearish" pattern.
+    bars_since_breakdown, peak_rvol_down, rvol_pct_of_peak_down, bounce_from_low_pct,
+      closest_approach_to_orh_pct: literal bearish mirrors of bars_since_breakout,
+      peak_rvol, rvol_pct_of_peak, pullback_from_high_pct, and
+      closest_approach_to_orl_pct respectively — same interpretation, opposite
+      direction. ORH plays the role ORL plays on the bullish side: the level that
+      must NOT be reclaimed for the breakdown to still be considered valid.
 - IONZ is -2x inverse of the single stock IONQ (not a broad index) — IONQ's
   technical_indicators are always fetched alongside IONZ automatically. Before
   recommending an IONZ setup, check that IONQ actually shows the corresponding
   opposite structure (e.g., IONQ price_below_orl=true supporting an IONZ long).
   Treat an IONZ bounce_setup with more skepticism if IONQ isn't confirming —
   IONZ is a small, thinly-traded fund where its own tape can be noisy.
-- ONLY suggest LONG trades. No short setups.
+- IONZ macro-day priority: check SPY and QQQ's own technical_indicators. If SPY or
+  QQQ show price_above_vwap=false or ema_3_above_ema_6=false (a "down" day), or
+  price is trading in a tight range close to today's open (a "sideways" day), and
+  IONZ independently qualifies via its own bounce_setup or breakdown_setup (never
+  relaxed — IONZ must still clear its own technical gate like every other ticker),
+  boost IONZ's rank/confidence above other competing qualifying setups for the
+  day. This never substitutes for IONZ's own technical trigger — it only breaks
+  ties/ranks higher when multiple setups qualify and the day's trade limit can't
+  take them all.
+- ONLY suggest LONG trades in `suggestions`. No short setups.
 - The catalyst for every long is the opening 5-min candle. A valid long setup requires
   bounce_setup=true OR pullback_setup=true:
     * bounce_setup=true (fresh breakout): price broke above the ORH and is holding at or
@@ -177,8 +259,7 @@ When generating trade suggestions:
       ticker that came within a percent or two of its ORL before recovering (even if
       it currently looks like only a mild pullback) is a weaker "held support" story
       than one that never came close.
-- If price_below_orl is true, exclude that ticker entirely — bearish structure.
-- Tickers where both bounce_setup and pullback_setup are false must be excluded from suggestions.
+{bearish_handling}
 - If no ticker meets all criteria, return an empty suggestions list.
 - TQQQ, SQQQ, IONZ, IONQ, NVDA, and SPCX are always included in technical_indicators regardless
   of scanner ranking. Consider them as candidates if their bounce_setup qualifies, but deprioritize
@@ -202,7 +283,7 @@ When generating trade suggestions:
   breakouts that qualify on paper but fail to hold. Mention this briefly as a caution in
   risk_note, but still evaluate bounce_setup/pullback_setup normally and generate suggestions as usual — this
   is a warning, not a reason to withhold suggestions or return an empty list.
-
+{shadow_option_section}
 Never force a trade to hit the goal by taking disproportionate risk.
 
 When your analysis is complete, call the submit_trade_suggestions tool exactly once
@@ -242,8 +323,8 @@ def _extract_json(text: str) -> str:
     return text
 
 
-def _build_tools() -> list[dict]:
-    return [
+def _build_tools(include_options: bool = False) -> list[dict]:
+    tools = [
         {
             "name": "get_portfolio",
             "description": (
@@ -326,6 +407,26 @@ def _build_tools() -> list[dict]:
             },
         },
     ]
+    if include_options:
+        tools.append(
+            {
+                "name": "get_option_chain",
+                "description": (
+                    "Fetch real option-chain contracts (calls and puts, 7-21 days to "
+                    "expiration, near-the-money) for one underlying ticker — strikes, "
+                    "bid/ask, mark, Greeks, open interest, volume. Use this to source real "
+                    "prices for a shadow option suggestion; never invent option prices."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "ticker": {"type": "string", "description": "Underlying ticker symbol."}
+                    },
+                    "required": ["ticker"],
+                },
+            }
+        )
+    return tools
 
 
 _TRADE_SETUP_SCHEMA = {
@@ -378,6 +479,66 @@ _TRADE_SETUP_SCHEMA = {
     ],
 }
 
+_OPTION_TRADE_SETUP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "ticker": {"type": "string"},
+        "option_symbol": {"type": "string"},
+        "option_type": {"type": "string", "enum": ["call", "put"]},
+        "strike_price": {"type": "number"},
+        "expiration_date": {"type": "string"},
+        "days_to_expiration": {"type": "integer"},
+        "trade_type": {"type": "string", "enum": ["intraday_cash", "swing", "partial_trim"]},
+        "profit_mode": {"type": "string"},
+        "entry_price": {"type": "number"},
+        "target_price": {"type": "number"},
+        "stop_loss": {"type": "number"},
+        "shares": {"type": "integer"},
+        "breakeven_price": {"type": "number"},
+        "delta_at_entry": {"type": ["number", "null"]},
+        "implied_volatility_at_entry": {"type": ["number", "null"]},
+        "bid_ask_spread_pct": {"type": ["number", "null"]},
+        "open_interest": {"type": ["integer", "null"]},
+        "volume": {"type": ["integer", "null"]},
+        "underlying_price_at_entry": {"type": "number"},
+        "expected_gain": {"type": "number"},
+        "max_loss": {"type": "number"},
+        "reward_risk_ratio": {"type": "number"},
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+        "rationale": {"type": "string"},
+        "setup_type": {"type": "string"},
+        "robinhood_instructions": {"type": "string"},
+    },
+    "required": [
+        "ticker",
+        "option_symbol",
+        "option_type",
+        "strike_price",
+        "expiration_date",
+        "days_to_expiration",
+        "trade_type",
+        "profit_mode",
+        "entry_price",
+        "target_price",
+        "stop_loss",
+        "shares",
+        "breakeven_price",
+        "delta_at_entry",
+        "implied_volatility_at_entry",
+        "bid_ask_spread_pct",
+        "open_interest",
+        "volume",
+        "underlying_price_at_entry",
+        "expected_gain",
+        "max_loss",
+        "reward_risk_ratio",
+        "confidence",
+        "rationale",
+        "setup_type",
+        "robinhood_instructions",
+    ],
+}
+
 _SUBMIT_SUGGESTIONS_TOOL = {
     "name": "submit_trade_suggestions",
     "description": (
@@ -397,6 +558,15 @@ _SUBMIT_SUGGESTIONS_TOOL = {
             "any_guardrail_triggered": {"type": "boolean"},
             "recommended": {"anyOf": [_TRADE_SETUP_SCHEMA, {"type": "null"}]},
             "suggestions": {"type": "array", "items": _TRADE_SETUP_SCHEMA},
+            "shadow_option_suggestions": {
+                "type": "array",
+                "items": _OPTION_TRADE_SETUP_SCHEMA,
+                "description": (
+                    "Option-equivalent of each qualifying setup (bullish or bearish), for "
+                    "calibration only — see 'Shadow option suggestions' in the system prompt. "
+                    "Leave empty if options are not enabled for this call."
+                ),
+            },
         },
         "required": [
             "goal",
@@ -446,6 +616,8 @@ def _execute_tool(name: str, tool_input: dict) -> dict | list:
         return schwab_service.get_technical_indicators(tickers)
     if name == "get_quotes":
         return schwab_service.get_batch_quotes(tool_input.get("tickers", []))
+    if name == "get_option_chain":
+        return schwab_service.get_option_chain(tool_input.get("ticker", ""))
     raise ValueError(f"Unknown tool: {name}")
 
 
@@ -567,19 +739,49 @@ def chat(ctx: DailyContext, user_message: str) -> str:
     return response.content[0].text
 
 
+def _include_options_suggestions() -> bool:
+    """INCLUDE_OPTIONS_SUGGESTIONS — SSM plain param in Lambda, .env.local locally.
+    Default false: config-gated rollout per intraday-options-pivot-plan.md §7 —
+    the feature fully no-ops (no get_option_chain tool, no shadow-mode prompt
+    section, no live API calls) without a redeploy to disable.
+    """
+    return os.environ.get("INCLUDE_OPTIONS_SUGGESTIONS", "false").lower() == "true"
+
+
+def _build_suggestion_system(
+    profit_mode: str,
+    trade_scope: str,
+    goal_dollars: int,
+    include_options: bool | None = None,
+) -> str:
+    if include_options is None:
+        include_options = _include_options_suggestions()
+    return _SUGGESTION_SYSTEM.format(
+        profit_mode=profit_mode,
+        trade_scope=trade_scope,
+        goal_dollars=goal_dollars,
+        option_chain_step=(_OPTION_CHAIN_STEP if include_options else ""),
+        bearish_handling=(
+            _BEARISH_HANDLING_WITH_OPTIONS if include_options else _BEARISH_HANDLING_EQUITY_ONLY
+        ),
+        shadow_option_section=(_SHADOW_OPTION_SECTION if include_options else ""),
+    )
+
+
 def suggest_trades(
     seed: dict,
     user_message: str,
     allow_loss: bool = False,
 ) -> TradeSuggestionResponse:
     """Ask Claude for structured trade suggestions via agentic tool use, then enforce guardrails."""
-    system = _SUGGESTION_SYSTEM.format(
+    include_options = _include_options_suggestions()
+    system = _build_suggestion_system(
         profit_mode=seed["profit_mode"],
         trade_scope=seed["trade_scope"],
         goal_dollars=int(seed["daily_goal"]),
     )
     payload = {**seed, "allow_loss": allow_loss, "user_message": user_message}
-    tools = _build_tools() + [_SUBMIT_SUGGESTIONS_TOOL]
+    tools = _build_tools(include_options=include_options) + [_SUBMIT_SUGGESTIONS_TOOL]
     parsed = _agentic_call(system, payload, tools=tools, finish_tool="submit_trade_suggestions")
 
     # Inject envelope fields in case Claude omitted them
@@ -593,6 +795,7 @@ def suggest_trades(
     parsed.setdefault("recommended", None)
     parsed.setdefault("guardrails_checked", [])
     parsed.setdefault("any_guardrail_triggered", False)
+    parsed.setdefault("shadow_option_suggestions", [])
 
     suggestion = TradeSuggestionResponse.model_validate(parsed)
 

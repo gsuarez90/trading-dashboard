@@ -149,6 +149,11 @@ class TradeSuggestionResponse(BaseModel):
     recommended: TradeSetupAny | None
     guardrails_checked: list[str]
     any_guardrail_triggered: bool
+    # Phase 0 shadow mode (intraday-options-pivot-plan.md §7) — the option-equivalent
+    # of each qualifying setup (bullish or bearish), for calibration only. Never
+    # surfaced as a recommendation; suggestions/recommended stay equity-only and
+    # unchanged while this is populated.
+    shadow_option_suggestions: list[OptionTradeSetup] = []
 
 
 # ── DynamoDB trade record ─────────────────────────────────────────────────────
