@@ -370,15 +370,30 @@ def _compute_indicators_from_candles(candles: list[dict]) -> dict | None:
     below the ORL intraminute and has since recovered would otherwise still
     qualify as if support had cleanly held.
 
+    breakdown_setup/pulldown_setup are the bearish mirror of the above,
+    added for the options pivot (intraday-options-pivot-plan.md §3.1) — same
+    math, opposite direction. ORL plays the role ORH plays on the bullish
+    side (the level that was broken through), and ORH plays the role ORL
+    plays (the level that must NOT be reclaimed for the setup to still be
+    valid — reclaiming it means the breakdown failed). bars_since_breakdown/
+    peak_rvol_down/rvol_pct_of_peak_down/bounce_from_low_pct/
+    closest_approach_to_orh_pct are the literal mirrors of
+    bars_since_breakout/peak_rvol/rvol_pct_of_peak/pullback_from_high_pct/
+    closest_approach_to_orl_pct, anchored to the breakdown bucket instead of
+    the breakout bucket.
+
     Returns None if there aren't at least 5 candles yet (opening range not
     complete). Otherwise returns:
     {
         orh, orl,                        # opening range high/low (9:30-9:35am)
         ema_3, ema_6, vwap, rvol, peak_rvol, rvol_pct_of_peak,
         pullback_from_high_pct, closest_approach_to_orl_pct, bars_since_breakout,
-        ema_3_above_ema_6, price_above_vwap,
+        peak_rvol_down, rvol_pct_of_peak_down, bounce_from_low_pct,
+        closest_approach_to_orh_pct, bars_since_breakdown,
+        ema_3_above_ema_6, ema_3_below_ema_6, price_above_vwap, price_below_vwap,
         price_above_orh, price_below_orl,
-        current_price, bounce_setup, pullback_setup
+        current_price, bounce_setup, pullback_setup,
+        breakdown_setup, pulldown_setup
     }
     """
     if len(candles) < 5:
@@ -389,6 +404,7 @@ def _compute_indicators_from_candles(candles: list[dict]) -> dict | None:
     buckets = [candles[i : i + 5] for i in range(0, len(candles), 5)]
 
     bucket_highs = [max(float(c["high"]) for c in b) for b in buckets]
+    bucket_lows = [min(float(c["low"]) for c in b) for b in buckets]
     bucket_closes = [float(b[-1]["close"]) for b in buckets]
 
     orh = round(bucket_highs[0], 2)
@@ -485,11 +501,55 @@ def _compute_indicators_from_candles(candles: list[dict]) -> dict | None:
         else None
     )
 
+    # First 5-min bucket after the opening range itself whose low broke the
+    # ORL — the literal mirror of breakout_bucket_idx.
+    breakdown_bucket_idx = next((i for i in range(1, len(buckets)) if bucket_lows[i] < orl), None)
+    bars_since_breakdown = (
+        (len(buckets) - 1) - breakdown_bucket_idx if breakdown_bucket_idx is not None else None
+    )
+
+    # peak_rvol_down mirrors peak_rvol exactly, just anchored to the
+    # breakdown bucket instead of the breakout bucket — the volume
+    # conviction of the breakdown itself.
+    peak_search_start_down = (
+        max(breakdown_bucket_idx * 5, 1) if breakdown_bucket_idx is not None else 1
+    )
+    peak_search_end_down = min(peak_search_start_down + _PEAK_WINDOW_CANDLES, len(vols))
+    rvol_series_down = [
+        r
+        for i in range(peak_search_start_down, peak_search_end_down)
+        if (r := _rvol_at(i)) is not None
+    ]
+    peak_rvol_down = max(rvol_series_down) if rvol_series_down else rvol
+    rvol_pct_of_peak_down = (
+        round(rvol / peak_rvol_down, 2) if rvol is not None and peak_rvol_down else None
+    )
+
+    low_since_open = min(lows)
+    bounce_from_low_pct = (
+        round((current - low_since_open) / low_since_open * 100, 2) if low_since_open > 0 else None
+    )
+
+    # Mirrors closest_approach_to_orl_pct's role: ORH is the level that must
+    # NOT be reclaimed for a breakdown to still be considered valid (the
+    # inverse of ORL needing to hold for a bullish pullback). Positive means
+    # ORH stayed clear (never approached); negative means price reclaimed
+    # above it at some point, invalidating the breakdown thesis even if the
+    # current snapshot has since rolled back over.
+    closest_approach_to_orh_pct = (
+        round((orh - max(highs[breakdown_bucket_idx * 5 :])) / orh * 100, 2)
+        if breakdown_bucket_idx is not None and orh > 0
+        else None
+    )
+
     price_above_orh = current > orh
     price_below_orl = current < orl
     ema_3_above_ema_6 = ema3 > ema6
+    ema_3_below_ema_6 = ema3 < ema6
     price_above_vwap = vwap is not None and current > vwap
+    price_below_vwap = vwap is not None and current < vwap
     bounce_setup = ema_3_above_ema_6 and vwap is not None and current > vwap and current >= orh
+    breakdown_setup = ema_3_below_ema_6 and price_below_vwap and current <= orl
 
     pullback_setup = (
         bars_since_breakout is not None
@@ -505,6 +565,18 @@ def _compute_indicators_from_candles(candles: list[dict]) -> dict | None:
         and closest_approach_to_orl_pct >= 0
     )
 
+    pulldown_setup = (
+        bars_since_breakdown is not None
+        and not breakdown_setup
+        and not price_above_orh
+        and ema_3_below_ema_6
+        and (current <= ema6 or price_below_vwap)
+        # mirrors pullback_setup's ORL guard: the ORH must have actually
+        # held (never reclaimed), not just been approached
+        and closest_approach_to_orh_pct is not None
+        and closest_approach_to_orh_pct >= 0
+    )
+
     return {
         "orh": orh,
         "orl": orl,
@@ -517,13 +589,22 @@ def _compute_indicators_from_candles(candles: list[dict]) -> dict | None:
         "pullback_from_high_pct": pullback_from_high_pct,
         "closest_approach_to_orl_pct": closest_approach_to_orl_pct,
         "bars_since_breakout": bars_since_breakout,
+        "peak_rvol_down": peak_rvol_down,
+        "rvol_pct_of_peak_down": rvol_pct_of_peak_down,
+        "bounce_from_low_pct": bounce_from_low_pct,
+        "closest_approach_to_orh_pct": closest_approach_to_orh_pct,
+        "bars_since_breakdown": bars_since_breakdown,
         "current_price": round(current, 2),
         "ema_3_above_ema_6": ema_3_above_ema_6,
+        "ema_3_below_ema_6": ema_3_below_ema_6,
         "price_above_vwap": price_above_vwap,
+        "price_below_vwap": price_below_vwap,
         "price_above_orh": price_above_orh,
         "price_below_orl": price_below_orl,
         "bounce_setup": bounce_setup,
         "pullback_setup": pullback_setup,
+        "breakdown_setup": breakdown_setup,
+        "pulldown_setup": pulldown_setup,
     }
 
 
