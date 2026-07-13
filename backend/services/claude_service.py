@@ -6,7 +6,13 @@ import re
 import anthropic
 
 from models.schemas import TradeSuggestionResponse
-from services import dynamo_service, finnhub_service, portfolio_factory, schwab_service
+from services import (
+    dynamo_service,
+    finnhub_service,
+    paper_trading_service,
+    portfolio_factory,
+    schwab_service,
+)
 from services.context_loader import (
     DailyContext,
     _cached_scanner_results,
@@ -833,5 +839,14 @@ def suggest_trades(
 
     suggestion.guardrails_checked = _GUARDRAIL_NAMES
     suggestion.any_guardrail_triggered = any_triggered
+
+    # Phase 0 shadow mode (intraday-options-pivot-plan.md §7) — log each
+    # option-equivalent suggestion for outcome tracking. Best-effort: a
+    # logging failure should never break the real (equity) response above.
+    if suggestion.shadow_option_suggestions:
+        try:
+            paper_trading_service.log_shadow_trades(suggestion.shadow_option_suggestions)
+        except Exception:
+            logger.exception("Failed to log shadow trades")
 
     return suggestion

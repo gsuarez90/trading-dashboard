@@ -1,13 +1,15 @@
+import logging
 import os
 import uuid
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from models.schemas import DailyCashSummary, PaperTrade, TradeSetup
+from models.schemas import DailyCashSummary, OptionTradeSetup, PaperTrade, TradeSetup
 from services import dynamo_service
 from services.guardrail_service import GuardrailContext, check_all
 
 ET = ZoneInfo("America/New_York")
+logger = logging.getLogger(__name__)
 
 
 def open_trade(
@@ -138,11 +140,12 @@ def close_trade(trade_id: str, exit_price: float, close_reason: str = "manual") 
     shares = trade["shares"]
     entry_price = trade["entry_price"]
     direction = trade["direction"]
+    multiplier = trade.get("multiplier", 1)
 
     if direction == "long":
-        realized_pnl = round((exit_price - entry_price) * shares, 2)
+        realized_pnl = round((exit_price - entry_price) * shares * multiplier, 2)
     else:
-        realized_pnl = round((entry_price - exit_price) * shares, 2)
+        realized_pnl = round((entry_price - exit_price) * shares * multiplier, 2)
 
     updates = {
         "status": "closed",
@@ -156,6 +159,110 @@ def close_trade(trade_id: str, exit_price: float, close_reason: str = "manual") 
         dynamo_service.increment_paper_pnl_cumulative(realized_pnl)
     except Exception:
         pass
+    return {**trade, **updates}
+
+
+# ── Shadow trades (Phase 0 calibration only) ──────────────────────────────────
+# intraday-options-pivot-plan.md §7 — never blocks on guardrails, never
+# touches real cash/P&L/trade-count. Isolated via a distinct status
+# namespace (shadow_open/shadow_closed) so get_open_trades()/
+# get_trades_by_date() — which drive real guardrails and the dashboard —
+# never see these records.
+
+
+def log_shadow_trade(setup: OptionTradeSetup, now: datetime | None = None) -> PaperTrade:
+    """Persist one shadow option suggestion for outcome tracking.
+
+    Unlike open_trade(), this never runs guardrails and never goes through a
+    pending->fill flow — a shadow trade isn't a real order, so its suggested
+    entry_price is treated as the fill price immediately, starting tracking
+    from the moment Claude generated it.
+    """
+    now_et = (
+        (now.replace(tzinfo=ET) if now.tzinfo is None else now.astimezone(ET))
+        if now is not None
+        else datetime.now(tz=ET)
+    )
+    today = now_et.strftime("%Y-%m-%d")
+
+    trade = PaperTrade(
+        trade_id=str(uuid.uuid4()),
+        date=today,
+        instrument_type="option",
+        multiplier=setup.multiplier,
+        ticker=setup.ticker,
+        direction=setup.direction,
+        trade_type=setup.trade_type,
+        shares=setup.shares,
+        entry_price=setup.entry_price,
+        target_price=setup.target_price,
+        stop_loss=setup.stop_loss,
+        expected_gain=setup.expected_gain,
+        max_loss=setup.max_loss,
+        reward_risk_ratio=setup.reward_risk_ratio,
+        confidence=setup.confidence,
+        rationale=setup.rationale,
+        option_symbol=setup.option_symbol,
+        option_type=setup.option_type,
+        strike_price=setup.strike_price,
+        expiration_date=setup.expiration_date,
+        days_to_expiration=setup.days_to_expiration,
+        breakeven_price=setup.breakeven_price,
+        delta_at_entry=setup.delta_at_entry,
+        implied_volatility_at_entry=setup.implied_volatility_at_entry,
+        bid_ask_spread_pct=setup.bid_ask_spread_pct,
+        open_interest=setup.open_interest,
+        volume=setup.volume,
+        underlying_price_at_entry=setup.underlying_price_at_entry,
+        setup_type=setup.setup_type,
+        status="shadow_open",
+        mode="shadow",
+        entry_time=now_et.isoformat(),
+    )
+    dynamo_service.put_trade(trade)
+    return trade
+
+
+def log_shadow_trades(
+    setups: list[OptionTradeSetup], now: datetime | None = None
+) -> list[PaperTrade]:
+    """Best-effort logging for a batch of shadow suggestions — one bad
+    record should never break the real suggest_trades() response."""
+    logged = []
+    for setup in setups:
+        try:
+            logged.append(log_shadow_trade(setup, now))
+        except Exception:
+            logger.exception("Failed to log shadow trade for %s", setup.ticker)
+    return logged
+
+
+def close_shadow_trade(trade_id: str, exit_price: float, close_reason: str) -> dict:
+    """Close a shadow trade — same premium * shares * multiplier math as
+    close_trade(), but writes shadow_closed (not closed) and never touches
+    dynamo_service.increment_paper_pnl_cumulative(), so shadow outcomes never
+    leak into the real cumulative P&L stat shown on the dashboard.
+    """
+    trade = dynamo_service.get_trade(trade_id)
+    if trade is None:
+        raise ValueError(f"Shadow trade {trade_id} not found")
+    if trade.get("status") != "shadow_open":
+        raise ValueError(f"Shadow trade {trade_id} is already closed")
+
+    shares = trade["shares"]
+    entry_price = trade["entry_price"]
+    multiplier = trade.get("multiplier", 1)
+    # every shadow option trade is long (buy to open, sell to close — §3.3)
+    realized_pnl = round((exit_price - entry_price) * shares * multiplier, 2)
+
+    updates = {
+        "status": "shadow_closed",
+        "exit_price": exit_price,
+        "exit_time": datetime.now(tz=ET).isoformat(),
+        "realized_pnl": realized_pnl,
+        "close_reason": close_reason,
+    }
+    dynamo_service.update_trade(trade_id, updates)
     return {**trade, **updates}
 
 

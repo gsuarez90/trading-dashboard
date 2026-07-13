@@ -39,8 +39,8 @@ def ensure_table_exists() -> None:
             TableName=name,
             AttributeDefinitions=[
                 {"AttributeName": "trade_id", "AttributeType": "S"},
-                {"AttributeName": "status",   "AttributeType": "S"},
-                {"AttributeName": "date",     "AttributeType": "S"},
+                {"AttributeName": "status", "AttributeType": "S"},
+                {"AttributeName": "date", "AttributeType": "S"},
             ],
             KeySchema=[{"AttributeName": "trade_id", "KeyType": "HASH"}],
             GlobalSecondaryIndexes=[
@@ -48,7 +48,7 @@ def ensure_table_exists() -> None:
                     "IndexName": "status-date-index",
                     "KeySchema": [
                         {"AttributeName": "status", "KeyType": "HASH"},
-                        {"AttributeName": "date",   "KeyType": "RANGE"},
+                        {"AttributeName": "date", "KeyType": "RANGE"},
                     ],
                     "Projection": {"ProjectionType": "ALL"},
                     "ProvisionedThroughput": {"ReadCapacityUnits": 5, "WriteCapacityUnits": 5},
@@ -133,6 +133,22 @@ def get_open_trades() -> list[dict]:
     return [_from_item(item) for item in response.get("Items", [])]
 
 
+def get_shadow_open_trades() -> list[dict]:
+    """All shadow (calibration-only) option trades with status='shadow_open'.
+
+    Deliberately a separate status value from 'open' — this query, unlike
+    get_open_trades(), is never consulted by guardrails, get_trades_by_date(),
+    or the real dashboard, so shadow calibration data can never leak into
+    real daily_loss_limit/daily_trade_limit counters or P&L
+    (intraday-options-pivot-plan.md §7).
+    """
+    response = _table().query(
+        IndexName="status-date-index",
+        KeyConditionExpression=Key("status").eq("shadow_open"),
+    )
+    return [_from_item(item) for item in response.get("Items", [])]
+
+
 def get_pending_trades_for_date(date: str) -> list[dict]:
     """All pending (unfilled) orders for a given date. Used by price monitor and EOD handler."""
     response = _table().query(
@@ -182,16 +198,18 @@ def log_guardrail_event(
     """Persist a guardrail trigger event. Stored in the same table as trades,
     queryable via the status-date-index GSI using status='guardrail_event'."""
     now = datetime.now(tz=ET)
-    _table().put_item(Item={
-        "trade_id": str(uuid.uuid4()),
-        "record_type": "guardrail_event",
-        "status": "guardrail_event",
-        "date": date or now.strftime("%Y-%m-%d"),
-        "timestamp": timestamp or now.isoformat(),
-        "ticker": ticker,
-        "rules_triggered": rules_triggered,
-        "messages": messages,
-    })
+    _table().put_item(
+        Item={
+            "trade_id": str(uuid.uuid4()),
+            "record_type": "guardrail_event",
+            "status": "guardrail_event",
+            "date": date or now.strftime("%Y-%m-%d"),
+            "timestamp": timestamp or now.isoformat(),
+            "ticker": ticker,
+            "rules_triggered": rules_triggered,
+            "messages": messages,
+        }
+    )
 
 
 # ── Cache (scanner / sentiment pre-compute) ───────────────────────────────────
@@ -200,13 +218,15 @@ def log_guardrail_event(
 def put_cache(key: str, payload: list | dict) -> None:
     """Store a named cache entry. Uses trade_id='cache#<key>' as the hash key."""
     now = datetime.now(tz=ET)
-    _table().put_item(Item={
-        "trade_id": f"cache#{key}",
-        "status": "cache",
-        "date": now.strftime("%Y-%m-%d"),
-        "cached_at": now.isoformat(),
-        "payload": json.dumps(payload, default=str),
-    })
+    _table().put_item(
+        Item={
+            "trade_id": f"cache#{key}",
+            "status": "cache",
+            "date": now.strftime("%Y-%m-%d"),
+            "cached_at": now.isoformat(),
+            "payload": json.dumps(payload, default=str),
+        }
+    )
 
 
 def get_cache(key: str) -> tuple[list | dict | None, str | None]:
