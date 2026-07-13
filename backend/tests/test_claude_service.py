@@ -63,6 +63,18 @@ def test_build_suggestion_system_default_is_options_primary():
     assert "If price_below_orl is true, exclude that ticker entirely" not in system
 
 
+def test_build_suggestion_system_scopes_200_dollar_heuristic_to_equity_only():
+    """Regression: the legacy equity '$200 expected_gain / use as much of the
+    cap as available' sizing heuristic was bleeding into option sizing live in
+    production (options were maxing out the position_size_cap guardrail
+    instead of respecting the $1k-$6k target band). Both must now explicitly
+    say which instrument type they apply to."""
+    system = claude_service._build_suggestion_system("cash_intraday", "holdings_only", 100)
+    assert "EQUITY sizing (applies only to an equity suggestion" in system
+    assert "OPTION sizing is completely different and does NOT follow the $200" in system
+    assert "the cap is only a backstop, never the target" in system
+
+
 def test_build_suggestion_system_kill_switch_reverts_to_equity_only():
     system = claude_service._build_suggestion_system(
         "cash_intraday", "holdings_only", 100, include_options=False

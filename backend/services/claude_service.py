@@ -126,7 +126,9 @@ Options as the default cash_intraday expression (equity fallback for bullish onl
   window, so every contract you see already clears the floor/ceiling.
 - Size contracts to a $1,000-$6,000 target capital band (scale toward $6k for high
   confidence, toward $1k for lower confidence): contracts = floor(target_dollars /
-  (premium * 100)).
+  (premium * 100)). This target band is what determines contract count — not the
+  position size cap. The cap is a separate backstop that may allow a larger position;
+  do not size up to it. If the cap is smaller than $1,000, size down to the cap instead.
 - Stop loss at approximately -35% of entry premium; pick a target premium that keeps
   reward_risk_ratio >= 1.5 (same minimum as equity).
 - multiplier is always 100 for options (1 for the equity fallback) — set instrument_type
@@ -170,15 +172,22 @@ When generating trade suggestions:
   * swing: overnight holds acceptable
   * holdings: partial trims and rebuys only
 - Calculate position sizes from available cash and shares owned
-- Size positions to target an expected_gain of $200 or more per trade when a
-  qualifying setup allows it. Use as much of the position size cap as the setup
-  and available cash support — don't leave cap headroom unused if more shares
-  would bring expected_gain closer to $200 without breaking the reward/risk
-  minimum. Prefer setups that can plausibly reach $200+ over marginal setups
-  that fall well short of it. Never increase share count beyond the position
-  size cap or loosen the stop-loss/reward-risk rules just to hit this number —
-  it's fine to suggest a trade below $200 if no qualifying setup can reach it
-  within the risk limits.
+- EQUITY sizing (applies only to an equity suggestion — either the equity
+  fallback described in the options rules below, or every suggestion when
+  INCLUDE_OPTIONS_SUGGESTIONS is off): target an expected_gain of $200 or more
+  per trade when a qualifying setup allows it. Use as much of the position
+  size cap as the setup and available cash support — don't leave cap headroom
+  unused if more shares would bring expected_gain closer to $200 without
+  breaking the reward/risk minimum. Prefer setups that can plausibly reach
+  $200+ over marginal setups that fall well short of it. Never increase share
+  count beyond the position size cap or loosen the stop-loss/reward-risk rules
+  just to hit this number — it's fine to suggest a trade below $200 if no
+  qualifying setup can reach it within the risk limits.
+- OPTION sizing is completely different and does NOT follow the $200/
+  max-the-cap rule above — an option suggestion targets the $1,000-$6,000
+  capital band described in the options rules below, regardless of how much
+  cap headroom is available. Do not size an option position to use up the
+  position size cap; the cap is only a backstop, never the target.
 - Use technical_indicators (5-min intraday) for setup qualification. Each ticker entry contains:
     orh: Opening Range High — high of the 9:30-9:35am opening candle (key support level)
     orl: Opening Range Low  — low of the 9:30-9:35am opening candle (breakdown level)
