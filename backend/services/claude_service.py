@@ -6,13 +6,7 @@ import re
 import anthropic
 
 from models.schemas import TradeSuggestionResponse
-from services import (
-    dynamo_service,
-    finnhub_service,
-    paper_trading_service,
-    portfolio_factory,
-    schwab_service,
-)
+from services import dynamo_service, finnhub_service, portfolio_factory, schwab_service
 from services.context_loader import (
     DailyContext,
     _cached_scanner_results,
@@ -82,11 +76,14 @@ Plain text only, no markdown.\
 """
 
 # ── Options pivot (intraday-options-pivot-plan.md) — config-gated prompt sections ──
-# INCLUDE_OPTIONS_SUGGESTIONS=false (default): bearish structure is still a hard
-# exclude, exactly like before this pivot. =true: bearish structure qualifies for
-# a shadow long-put suggestion instead, and get_option_chain becomes available.
-# Phase 0 (shadow mode) keeps `suggestions`/`recommended` equity-only either way —
-# only `shadow_option_suggestions` differs.
+# INCLUDE_OPTIONS_SUGGESTIONS=true (default): options are the primary cash_intraday
+# suggestion. Bullish structure (bounce_setup/pullback_setup) -> long call, falling
+# back to the equity long if no viable contract exists. Bearish structure
+# (breakdown_setup/pulldown_setup) -> long put, with no equity fallback (the equity
+# system never shorts) — excluded entirely if no viable put exists. =false: an
+# emergency kill switch back to the original equity-only, bullish-only behavior
+# (bearish hard-excluded, no options tool at all) — same env-var pattern as
+# PORTFOLIO_MODE/TRADING_MODE, not a staged rollout.
 
 _BEARISH_HANDLING_EQUITY_ONLY = """\
 - If price_below_orl is true, exclude that ticker entirely — bearish structure.
@@ -95,26 +92,31 @@ _BEARISH_HANDLING_EQUITY_ONLY = """\
 
 _BEARISH_HANDLING_WITH_OPTIONS = """\
 - If price_below_orl is true, this is bearish structure — check breakdown_setup/pulldown_setup:
-  if either is true, this ticker qualifies for a SHADOW long PUT suggestion (see "Shadow option
-  suggestions" below), never an equity suggestion. Do NOT add it to `suggestions` — bearish
-  tickers never appear there, only in `shadow_option_suggestions`.
-- Tickers where both bounce_setup and pullback_setup are false must be excluded from
-  `suggestions` (equity longs). They may still qualify for a shadow put if breakdown_setup or
-  pulldown_setup is true — see below.
-- Tickers where none of bounce_setup/pullback_setup/breakdown_setup/pulldown_setup are true must
-  be excluded entirely, from both `suggestions` and `shadow_option_suggestions`.\
+  if either is true, this ticker qualifies for a long PUT suggestion via the options-primary
+  rule below (instrument_type="option") — never an equity suggestion, since the equity system
+  never shorts.
+- A ticker must show at least one true qualifier — bounce_setup, pullback_setup,
+  breakdown_setup, or pulldown_setup — to appear in `suggestions` at all. Exclude it entirely
+  if all four are false.\
 """
 
-_SHADOW_OPTION_SECTION = """
-Shadow option suggestions (calibration only, not yet an acted-on recommendation):
-- For EVERY ticker that qualifies under `suggestions` (bounce_setup or pullback_setup) OR
-  qualifies bearish (breakdown_setup or pulldown_setup), also generate the option-equivalent
-  trade and place it in `shadow_option_suggestions` — a long call for a bullish qualifier, a
-  long put for a bearish qualifier. This never affects `recommended` or `suggestions` — those
-  stay equity-only and unchanged during this calibration period.
-- Call get_option_chain(ticker) to source real strikes, premiums, and Greeks — never invent
-  option prices. Select the strike closest to a 0.40-0.60 delta (near-the-money) from what
-  get_option_chain actually returns.
+_OPTIONS_PRIMARY_SECTION = """
+Options as the default cash_intraday expression (equity fallback for bullish only):
+- For a ticker that qualifies bullish (bounce_setup or pullback_setup), the default suggestion
+  is a long CALL, not equity shares. Call get_option_chain(ticker) to source real strikes,
+  premiums, and Greeks — never invent option prices. Select the strike closest to a 0.40-0.60
+  delta (near-the-money) from what get_option_chain actually returns, using the equity entry
+  level described above as the reference underlying price.
+- If no viable call exists for a bullish ticker — get_option_chain returns nothing usable, or
+  every candidate would fail the liquidity/DTE guardrails (option_liquidity_check/
+  expiration_proximity) — fall back to the equity long exactly as described above (shares, at
+  the stated entry/stop levels, instrument_type="equity") instead of dropping the ticker. A
+  good technical setup should never be thrown away just because the options side isn't
+  tradeable that day.
+- For a ticker that qualifies bearish (breakdown_setup or pulldown_setup), the suggestion is a
+  long PUT, sourced the same way (get_option_chain, 0.40-0.60 delta near-the-money). There is
+  no equity fallback for bearish — the equity system never shorts — so if no viable put exists,
+  exclude the ticker entirely rather than suggesting anything.
 - Only use expirations get_option_chain already returned — it only queries the 7-21 day
   window, so every contract you see already clears the floor/ceiling.
 - Size contracts to a $1,000-$6,000 target capital band (scale toward $6k for high
@@ -122,19 +124,21 @@ Shadow option suggestions (calibration only, not yet an acted-on recommendation)
   (premium * 100)).
 - Stop loss at approximately -35% of entry premium; pick a target premium that keeps
   reward_risk_ratio >= 1.5 (same minimum as equity).
-- multiplier is always 100. breakeven_price, expected_gain, max_loss, and reward_risk_ratio
-  are recomputed server-side from your prices — report your best estimate, it will be
-  corrected automatically.
-- robinhood_instructions must say "buy to open" at entry and "sell to close" at exit — never
-  "exercise" — same 3:45pm alarm reminder pattern as equities.
-- setup_type: "breakout" or "pullback_reclaim" (mirroring the bullish equity setup_type) for a
-  call, "breakdown" or "pulldown_reclaim" for a put.
+- multiplier is always 100 for options (1 for the equity fallback) — set instrument_type
+  correctly ("option" vs "equity"), it determines how every downstream guardrail and P&L
+  calculation scales.
+- breakeven_price, expected_gain, max_loss, and reward_risk_ratio are recomputed server-side
+  from your prices — report your best estimate, it will be corrected automatically.
+- robinhood_instructions for an option must say "buy to open" at entry and "sell to close" at
+  exit — never "exercise" — same 3:45pm alarm reminder pattern as equities.
+- setup_type: "breakout" or "pullback_reclaim" for a bullish call (or the equity fallback),
+  "breakdown" or "pulldown_reclaim" for a put.
 """
 
 _OPTION_CHAIN_STEP = """\
-5. get_option_chain — only once a ticker has already qualified via technical_indicators \
-(bullish or bearish) and you're ready to generate its shadow option suggestion. Never call \
-this to explore randomly.
+5. get_option_chain — once a ticker has qualified via technical_indicators (bullish or \
+bearish) and you're ready to price its call/put suggestion. Never call this to explore \
+randomly.
 """
 
 _SUGGESTION_SYSTEM = """\
@@ -289,7 +293,7 @@ When generating trade suggestions:
   breakouts that qualify on paper but fail to hold. Mention this briefly as a caution in
   risk_note, but still evaluate bounce_setup/pullback_setup normally and generate suggestions as usual — this
   is a warning, not a reason to withhold suggestions or return an empty list.
-{shadow_option_section}
+{options_primary_section}
 Never force a trade to hit the goal by taking disproportionate risk.
 
 When your analysis is complete, call the submit_trade_suggestions tool exactly once
@@ -421,7 +425,7 @@ def _build_tools(include_options: bool = False) -> list[dict]:
                     "Fetch real option-chain contracts (calls and puts, 7-21 days to "
                     "expiration, near-the-money) for one underlying ticker — strikes, "
                     "bid/ask, mark, Greeks, open interest, volume. Use this to source real "
-                    "prices for a shadow option suggestion; never invent option prices."
+                    "prices for a call/put suggestion; never invent option prices."
                 ),
                 "input_schema": {
                     "type": "object",
@@ -545,49 +549,57 @@ _OPTION_TRADE_SETUP_SCHEMA = {
     ],
 }
 
-_SUBMIT_SUGGESTIONS_TOOL = {
-    "name": "submit_trade_suggestions",
-    "description": (
-        "Deliver your final trade suggestions. Call this exactly once, after you are "
-        "done gathering data — this is the only way to answer, do not respond in plain text."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "goal": {"type": "number"},
-            "profit_mode": {"type": "string"},
-            "trade_scope": {"type": "string"},
-            "risk_note": {"type": "string"},
-            "market_conditions": {"type": "string"},
-            "intraday_viability": {"type": ["string", "null"]},
-            "guardrails_checked": {"type": "array", "items": {"type": "string"}},
-            "any_guardrail_triggered": {"type": "boolean"},
-            "recommended": {"anyOf": [_TRADE_SETUP_SCHEMA, {"type": "null"}]},
-            "suggestions": {"type": "array", "items": _TRADE_SETUP_SCHEMA},
-            "shadow_option_suggestions": {
-                "type": "array",
-                "items": _OPTION_TRADE_SETUP_SCHEMA,
-                "description": (
-                    "Option-equivalent of each qualifying setup (bullish or bearish), for "
-                    "calibration only — see 'Shadow option suggestions' in the system prompt. "
-                    "Leave empty if options are not enabled for this call."
-                ),
+
+def _build_submit_suggestions_tool(include_options: bool) -> dict:
+    """suggestions/recommended accept either shape via a oneOf/anyOf discriminated
+    on instrument_type when options are enabled — confirmed reliable against
+    claude-sonnet-4-6 via scripts/test_option_schema_union_live.py. Kill-switch
+    off reverts to the original equity-only schema exactly.
+    """
+    suggestion_item_schema = (
+        {"oneOf": [_TRADE_SETUP_SCHEMA, _OPTION_TRADE_SETUP_SCHEMA]}
+        if include_options
+        else _TRADE_SETUP_SCHEMA
+    )
+    recommended_schema = (
+        {"anyOf": [_TRADE_SETUP_SCHEMA, _OPTION_TRADE_SETUP_SCHEMA, {"type": "null"}]}
+        if include_options
+        else {"anyOf": [_TRADE_SETUP_SCHEMA, {"type": "null"}]}
+    )
+    return {
+        "name": "submit_trade_suggestions",
+        "description": (
+            "Deliver your final trade suggestions. Call this exactly once, after you are "
+            "done gathering data — this is the only way to answer, do not respond in plain text."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "goal": {"type": "number"},
+                "profit_mode": {"type": "string"},
+                "trade_scope": {"type": "string"},
+                "risk_note": {"type": "string"},
+                "market_conditions": {"type": "string"},
+                "intraday_viability": {"type": ["string", "null"]},
+                "guardrails_checked": {"type": "array", "items": {"type": "string"}},
+                "any_guardrail_triggered": {"type": "boolean"},
+                "recommended": recommended_schema,
+                "suggestions": {"type": "array", "items": suggestion_item_schema},
             },
+            "required": [
+                "goal",
+                "profit_mode",
+                "trade_scope",
+                "risk_note",
+                "market_conditions",
+                "intraday_viability",
+                "guardrails_checked",
+                "any_guardrail_triggered",
+                "recommended",
+                "suggestions",
+            ],
         },
-        "required": [
-            "goal",
-            "profit_mode",
-            "trade_scope",
-            "risk_note",
-            "market_conditions",
-            "intraday_viability",
-            "guardrails_checked",
-            "any_guardrail_triggered",
-            "recommended",
-            "suggestions",
-        ],
-    },
-}
+    }
 
 
 def _execute_tool(name: str, tool_input: dict) -> dict | list:
@@ -747,11 +759,12 @@ def chat(ctx: DailyContext, user_message: str) -> str:
 
 def _include_options_suggestions() -> bool:
     """INCLUDE_OPTIONS_SUGGESTIONS — SSM plain param in Lambda, .env.local locally.
-    Default false: config-gated rollout per intraday-options-pivot-plan.md §7 —
-    the feature fully no-ops (no get_option_chain tool, no shadow-mode prompt
-    section, no live API calls) without a redeploy to disable.
+    Default true: options are the primary cash_intraday expression
+    (intraday-options-pivot-plan.md). Set to false as an emergency kill switch to
+    revert instantly to the original equity-only, bullish-only behavior without a
+    redeploy — same config-gated pattern as PORTFOLIO_MODE/TRADING_MODE.
     """
-    return os.environ.get("INCLUDE_OPTIONS_SUGGESTIONS", "false").lower() == "true"
+    return os.environ.get("INCLUDE_OPTIONS_SUGGESTIONS", "true").lower() == "true"
 
 
 def _build_suggestion_system(
@@ -770,7 +783,7 @@ def _build_suggestion_system(
         bearish_handling=(
             _BEARISH_HANDLING_WITH_OPTIONS if include_options else _BEARISH_HANDLING_EQUITY_ONLY
         ),
-        shadow_option_section=(_SHADOW_OPTION_SECTION if include_options else ""),
+        options_primary_section=(_OPTIONS_PRIMARY_SECTION if include_options else ""),
     )
 
 
@@ -785,9 +798,12 @@ def suggest_trades(
         profit_mode=seed["profit_mode"],
         trade_scope=seed["trade_scope"],
         goal_dollars=int(seed["daily_goal"]),
+        include_options=include_options,
     )
     payload = {**seed, "allow_loss": allow_loss, "user_message": user_message}
-    tools = _build_tools(include_options=include_options) + [_SUBMIT_SUGGESTIONS_TOOL]
+    tools = _build_tools(include_options=include_options) + [
+        _build_submit_suggestions_tool(include_options)
+    ]
     parsed = _agentic_call(system, payload, tools=tools, finish_tool="submit_trade_suggestions")
 
     # Inject envelope fields in case Claude omitted them
@@ -801,7 +817,6 @@ def suggest_trades(
     parsed.setdefault("recommended", None)
     parsed.setdefault("guardrails_checked", [])
     parsed.setdefault("any_guardrail_triggered", False)
-    parsed.setdefault("shadow_option_suggestions", [])
 
     suggestion = TradeSuggestionResponse.model_validate(parsed)
 
@@ -839,14 +854,5 @@ def suggest_trades(
 
     suggestion.guardrails_checked = _GUARDRAIL_NAMES
     suggestion.any_guardrail_triggered = any_triggered
-
-    # Phase 0 shadow mode (intraday-options-pivot-plan.md §7) — log each
-    # option-equivalent suggestion for outcome tracking. Best-effort: a
-    # logging failure should never break the real (equity) response above.
-    if suggestion.shadow_option_suggestions:
-        try:
-            paper_trading_service.log_shadow_trades(suggestion.shadow_option_suggestions)
-        except Exception:
-            logger.exception("Failed to log shadow trades")
 
     return suggestion

@@ -196,101 +196,81 @@ def run_daily_refresh() -> dict:
     }
 
 
-def _monitor_shadow_option_trades() -> int:
-    """Checks Phase 0 shadow (calibration-only) option trades against
-    target/stop, using real option premium quotes. Completely separate from
-    the real trade loop below — shadow trades live under a distinct
-    shadow_open/shadow_closed status namespace (dynamo_service.
-    get_shadow_open_trades()), so they never touch real cash, P&L, or
-    guardrail counters (intraday-options-pivot-plan.md §7).
+def _fetch_quotes(trades: list[dict]) -> tuple[dict, dict]:
+    """Splits trades by instrument_type and fetches equity ticker quotes plus
+    option premium quotes separately — an option's own bid/ask/mark is what
+    matters for its fill/target/stop, not its underlying ticker's price.
+    Returns (equity_quotes keyed by ticker, option_quotes keyed by option_symbol).
     """
-    shadow_trades = dynamo_service.get_shadow_open_trades()
-    if not shadow_trades:
-        return 0
-
-    option_symbols = list({t["option_symbol"] for t in shadow_trades if t.get("option_symbol")})
-    try:
-        quotes = {
-            q["option_symbol"]: q["price"] for q in schwab_service.get_option_quotes(option_symbols)
+    equity_tickers = list(
+        {
+            t["ticker"]
+            for t in trades
+            if t.get("instrument_type", "equity") != "option" and t.get("ticker")
         }
-    except Exception as e:
-        logger.error("Shadow price monitor: option quotes failed: %s", e, exc_info=True)
-        return 0
+    )
+    option_symbols = list(
+        {
+            t["option_symbol"]
+            for t in trades
+            if t.get("instrument_type") == "option" and t.get("option_symbol")
+        }
+    )
 
-    closed = 0
-    for trade in shadow_trades:
-        price = quotes.get(trade.get("option_symbol"))
-        if price is None:
-            continue
-
-        target = trade.get("target_price")
-        stop = trade.get("stop_loss")
-        # every shadow option trade is long (buy to open, sell to close — §3.3)
-        hit_target = price >= target
-        hit_stop = price <= stop
-
-        close_reason = None
-        if hit_target:
-            close_reason = "target_hit"
-        elif hit_stop:
-            close_reason = "stop_hit"
-        if close_reason is None:
-            continue
-
+    equity_quotes = {}
+    if equity_tickers:
         try:
-            paper_trading_service.close_shadow_trade(trade["trade_id"], price, close_reason)
-            closed += 1
-            logger.info(
-                "Closed shadow trade %s %s @ %.2f (%s)",
-                trade.get("ticker"),
-                trade["trade_id"],
-                price,
-                close_reason,
-            )
+            equity_quotes = {
+                q["ticker"]: q["price"] for q in schwab_service.get_batch_quotes(equity_tickers)
+            }
         except Exception as e:
-            logger.error("Failed to close shadow trade %s: %s", trade["trade_id"], e)
+            logger.error("Equity quotes failed: %s", e, exc_info=True)
 
-    return closed
+    option_quotes = {}
+    if option_symbols:
+        try:
+            option_quotes = {
+                q["option_symbol"]: q["price"]
+                for q in schwab_service.get_option_quotes(option_symbols)
+            }
+        except Exception as e:
+            logger.error("Option quotes failed: %s", e, exc_info=True)
+
+    return equity_quotes, option_quotes
+
+
+def _price_for_trade(trade: dict, equity_quotes: dict, option_quotes: dict) -> float | None:
+    if trade.get("instrument_type") == "option":
+        return option_quotes.get(trade.get("option_symbol"))
+    return equity_quotes.get(trade.get("ticker"))
 
 
 def run_price_monitor() -> dict:
     """Every 1 min during market hours — fill pending orders + check open trades.
 
-    Pending paper orders: fill when market price meets the limit condition.
-    Open paper trades: auto-close at target or stop.
-    Live trades: flag for manual close (never auto-closed).
-    Shadow option trades (Phase 0 calibration): checked separately, see
-    _monitor_shadow_option_trades().
+    Pending orders (equity or option): fill when market price meets the limit
+    condition. Open trades: auto-close at target or stop (paper) or flag
+    (live, never auto-closed). Options are always "long" (§3.3 of the options
+    pivot), so the existing long-side comparison applies unmodified — only
+    the quote source differs (option premium via get_option_quotes(), not
+    the underlying ticker's price).
     """
     today = datetime.now(tz=ET).strftime("%Y-%m-%d")
     open_trades = dynamo_service.get_open_trades()
     pending_trades = dynamo_service.get_pending_trades_for_date(today)
-    shadow_closed = _monitor_shadow_option_trades()
 
     if not open_trades and not pending_trades:
         logger.info("Price monitor: no open or pending trades")
-        return {
-            "checked": 0,
-            "filled": 0,
-            "closed": 0,
-            "flagged": 0,
-            "shadow_closed": shadow_closed,
-        }
+        return {"checked": 0, "filled": 0, "closed": 0, "flagged": 0}
 
     logger.info("Price monitor: %d open, %d pending", len(open_trades), len(pending_trades))
 
-    # Single batch quote call covering all unique tickers
-    all_tickers = list({t["ticker"] for t in open_trades + pending_trades if t.get("ticker")})
-    try:
-        quotes = {q["ticker"]: q["price"] for q in schwab_service.get_batch_quotes(all_tickers)}
-        logger.info("Price monitor: quotes fetched for %d tickers", len(quotes))
-    except Exception as e:
-        logger.error(
-            "Price monitor: Schwab quotes failed — trades will not be evaluated: %s",
-            e,
-            exc_info=True,
-        )
-        quotes = {}
+    equity_quotes, option_quotes = _fetch_quotes(open_trades + pending_trades)
+    logger.info(
+        "Price monitor: quotes fetched for %d tickers, %d option contracts",
+        len(equity_quotes),
+        len(option_quotes),
+    )
 
     now_iso = datetime.now(tz=ET).isoformat()
     filled = 0
@@ -299,8 +279,7 @@ def run_price_monitor() -> dict:
 
     # ── Fill pending orders ───────────────────────────────────────────────────
     for trade in pending_trades:
-        ticker = trade.get("ticker")
-        price = quotes.get(ticker)
+        price = _price_for_trade(trade, equity_quotes, option_quotes)
         if price is None:
             continue
 
@@ -314,14 +293,15 @@ def run_price_monitor() -> dict:
         try:
             paper_trading_service.fill_pending_order(trade["trade_id"], price)
             filled += 1
-            logger.info("Filled pending order %s %s @ %.2f", ticker, trade["trade_id"], price)
+            logger.info(
+                "Filled pending order %s %s @ %.2f", trade.get("ticker"), trade["trade_id"], price
+            )
         except Exception as e:
             logger.error("Failed to fill pending order %s: %s", trade["trade_id"], e)
 
     # ── Monitor open trades ───────────────────────────────────────────────────
     for trade in open_trades:
-        ticker = trade.get("ticker")
-        price = quotes.get(ticker)
+        price = _price_for_trade(trade, equity_quotes, option_quotes)
         if price is None:
             continue
 
@@ -348,7 +328,7 @@ def run_price_monitor() -> dict:
                 closed += 1
                 logger.info(
                     "Closed paper trade %s %s @ %.2f (%s)",
-                    ticker,
+                    trade.get("ticker"),
                     trade["trade_id"],
                     price,
                     close_reason,
@@ -369,70 +349,30 @@ def run_price_monitor() -> dict:
                 flagged += 1
                 logger.info(
                     "Flagged live trade %s %s for manual close (%s)",
-                    ticker,
+                    trade.get("ticker"),
                     trade["trade_id"],
                     close_reason,
                 )
             except Exception as e:
                 logger.error("Failed to flag live trade %s: %s", trade["trade_id"], e)
 
-    logger.info(
-        "Price monitor complete — filled=%d closed=%d flagged=%d shadow_closed=%d",
-        filled,
-        closed,
-        flagged,
-        shadow_closed,
-    )
+    logger.info("Price monitor complete — filled=%d closed=%d flagged=%d", filled, closed, flagged)
     return {
         "checked": len(open_trades) + len(pending_trades),
         "filled": filled,
         "closed": closed,
         "flagged": flagged,
-        "shadow_closed": shadow_closed,
     }
 
 
-def _close_shadow_trades_eod() -> int:
-    """EOD force-close for shadow option trades — every shadow suggestion
-    carries the same cash_intraday 'exit today' intent as its equity
-    counterpart, so it gets swept the same way real open trades do below.
-    """
-    shadow_trades = dynamo_service.get_shadow_open_trades()
-    if not shadow_trades:
-        return 0
-
-    option_symbols = list({t["option_symbol"] for t in shadow_trades if t.get("option_symbol")})
-    try:
-        quotes = {
-            q["option_symbol"]: q["price"] for q in schwab_service.get_option_quotes(option_symbols)
-        }
-    except Exception as e:
-        logger.error(
-            "EOD shadow: option quotes failed — using entry prices as fallback: %s",
-            e,
-            exc_info=True,
-        )
-        quotes = {}
-
-    closed = 0
-    for trade in shadow_trades:
-        price = quotes.get(trade.get("option_symbol")) or trade.get("entry_price", 0)
-        try:
-            paper_trading_service.close_shadow_trade(trade["trade_id"], price, "eod_close")
-            closed += 1
-            logger.info(
-                "EOD: closed shadow trade %s %s @ %.2f",
-                trade.get("ticker"),
-                trade["trade_id"],
-                price,
-            )
-        except Exception as e:
-            logger.error("EOD: failed to close shadow trade %s: %s", trade["trade_id"], e)
-    return closed
-
-
 def run_end_of_day() -> dict:
-    """3:45pm ET — expire pending orders, close open paper trades, flag live trades."""
+    """3:45pm ET — expire pending orders, close open trades, flag live trades.
+
+    Every cash_intraday position (equity or option) carries the same
+    same-day-exit intent, so this force-closes every open paper trade
+    regardless of instrument_type — this is also the de facto "expiration"
+    handler for options, since no position is ever held past today anyway.
+    """
     logger.info("EOD handler starting")
     today = datetime.now(tz=ET).strftime("%Y-%m-%d")
 
@@ -441,36 +381,25 @@ def run_end_of_day() -> dict:
     if expired:
         logger.info("EOD: expired %d unfilled orders", expired)
 
-    shadow_closed = _close_shadow_trades_eod()
-
     open_trades = dynamo_service.get_open_trades()
     if not open_trades:
         logger.info("EOD: no open trades")
-        return {
-            "paper_closed": 0,
-            "live_flagged": 0,
-            "expired": expired,
-            "shadow_closed": shadow_closed,
-        }
+        return {"paper_closed": 0, "live_flagged": 0, "expired": expired}
 
     logger.info("EOD: processing %d open trades", len(open_trades))
-    tickers = list({t["ticker"] for t in open_trades if t.get("ticker")})
-    try:
-        quotes = {q["ticker"]: q["price"] for q in schwab_service.get_batch_quotes(tickers)}
-        logger.info("EOD: quotes fetched for %d tickers", len(quotes))
-    except Exception as e:
-        logger.error(
-            "EOD: Schwab quotes failed — using entry prices as fallback: %s", e, exc_info=True
-        )
-        quotes = {}
+    equity_quotes, option_quotes = _fetch_quotes(open_trades)
+    logger.info(
+        "EOD: quotes fetched for %d tickers, %d option contracts",
+        len(equity_quotes),
+        len(option_quotes),
+    )
 
     now_iso = datetime.now(tz=ET).isoformat()
     paper_closed = 0
     live_flagged = 0
 
     for trade in open_trades:
-        ticker = trade.get("ticker")
-        price = quotes.get(ticker)
+        price = _price_for_trade(trade, equity_quotes, option_quotes)
         mode = trade.get("mode", "paper")
 
         if mode == "paper":
@@ -479,7 +408,10 @@ def run_end_of_day() -> dict:
                 paper_trading_service.close_trade(trade["trade_id"], exit_price, "eod_close")
                 paper_closed += 1
                 logger.info(
-                    "EOD: closed paper trade %s %s @ %.2f", ticker, trade["trade_id"], exit_price
+                    "EOD: closed paper trade %s %s @ %.2f",
+                    trade.get("ticker"),
+                    trade["trade_id"],
+                    exit_price,
                 )
             except Exception as e:
                 logger.error("EOD: failed to close paper trade %s: %s", trade["trade_id"], e)
@@ -495,21 +427,17 @@ def run_end_of_day() -> dict:
                 )
                 live_flagged += 1
                 logger.info(
-                    "EOD: flagged live trade %s %s for manual close", ticker, trade["trade_id"]
+                    "EOD: flagged live trade %s %s for manual close",
+                    trade.get("ticker"),
+                    trade["trade_id"],
                 )
             except Exception as e:
                 logger.error("EOD: failed to flag live trade %s: %s", trade["trade_id"], e)
 
     logger.info(
-        "EOD complete — paper_closed=%d live_flagged=%d expired=%d shadow_closed=%d",
+        "EOD complete — paper_closed=%d live_flagged=%d expired=%d",
         paper_closed,
         live_flagged,
         expired,
-        shadow_closed,
     )
-    return {
-        "paper_closed": paper_closed,
-        "live_flagged": live_flagged,
-        "expired": expired,
-        "shadow_closed": shadow_closed,
-    }
+    return {"paper_closed": paper_closed, "live_flagged": live_flagged, "expired": expired}

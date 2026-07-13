@@ -7,14 +7,14 @@ from fastapi import APIRouter, HTTPException, Query
 ET = ZoneInfo("America/New_York")
 from pydantic import BaseModel
 
-from models.schemas import DailyCashSummary, PaperTrade, TradeSetup
+from models.schemas import DailyCashSummary, PaperTrade, TradeSetupAny
 from services import dynamo_service, paper_trading_service, portfolio_factory
 
 router = APIRouter(prefix="/paper-trades", tags=["paper-trades"])
 
 
 class OpenTradeRequest(BaseModel):
-    setup: TradeSetup
+    setup: TradeSetupAny
     allow_loss: bool = False
 
 

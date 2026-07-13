@@ -7,6 +7,10 @@ function dirBadge(direction) {
   return <Badge color={direction === 'long' ? 'green' : 'red'} size="xs" radius="xl" variant="light">{direction.toUpperCase()}</Badge>
 }
 
+function optionTypeBadge(optionType) {
+  return <Badge color={optionType === 'call' ? 'green' : 'red'} size="xs" radius="xl" variant="light">{optionType.toUpperCase()}</Badge>
+}
+
 function confBadge(confidence) {
   const color = confidence === 'high' ? 'green' : confidence === 'medium' ? 'yellow' : 'red'
   return <Badge color={color} size="xs" radius="xl" variant="light">{confidence.toUpperCase()}</Badge>
@@ -18,6 +22,8 @@ function SuggestionCard({ trade, isRecommended, allowLoss }) {
   const [submitted, setSubmitted]   = useState(false)
   const [submitErr, setSubmitErr]   = useState(null)
   const pnlColor = (trade.current_unrealized_pnl ?? 0) >= 0 ? 'green' : 'red'
+  const isOption = trade.instrument_type === 'option'
+  const totalCost = isOption ? trade.entry_price * trade.shares * (trade.multiplier ?? 100) : null
 
   function paperTrade() {
     setSubmitting(true)
@@ -45,19 +51,34 @@ function SuggestionCard({ trade, isRecommended, allowLoss }) {
       {/* header */}
       <Group gap="xs" mb="xs" wrap="wrap">
         <Text fw={700} size="sm" ff="mono">{trade.ticker}</Text>
-        {dirBadge(trade.direction)}
+        {isOption ? optionTypeBadge(trade.option_type) : dirBadge(trade.direction)}
         {confBadge(trade.confidence)}
         <Text size="xs" c="dimmed" ml="auto">{trade.trade_type.replace(/_/g, ' ')}</Text>
         {isRecommended && <Text size="xs" fw={700} c="green">★ RECOMMENDED</Text>}
       </Group>
 
+      {/* option-specific: strike, expiration, DTE */}
+      {isOption && (
+        <Group gap="md" mb="xs">
+          <Text size="xs" c="dimmed">
+            Strike <Text span fw={700} c="var(--text)" ff="mono">${trade.strike_price.toFixed(2)}</Text>
+          </Text>
+          <Text size="xs" c="dimmed">
+            Exp <Text span fw={700} c="var(--text)" ff="mono">{trade.expiration_date}</Text>
+          </Text>
+          <Text size="xs" c="dimmed">
+            DTE <Text span fw={700} c="var(--text)" ff="mono">{trade.days_to_expiration}</Text>
+          </Text>
+        </Group>
+      )}
+
       {/* price grid */}
       <SimpleGrid cols={{ base: 2, sm: 3 }} mb="xs">
         {[
-          ['Entry',     `$${trade.entry_price.toFixed(2)}`],
+          [isOption ? 'Premium' : 'Entry', `$${trade.entry_price.toFixed(2)}`],
           ['Target',    `$${trade.target_price.toFixed(2)}`],
           ['Stop',      `$${trade.stop_loss.toFixed(2)}`],
-          ['Shares',    trade.shares],
+          [isOption ? 'Contracts' : 'Shares', trade.shares],
           ['Exp. Gain', `+$${trade.expected_gain.toFixed(0)}`],
           ['Max Loss',  `-$${trade.max_loss.toFixed(0)}`],
         ].map(([label, val]) => (
@@ -67,6 +88,24 @@ function SuggestionCard({ trade, isRecommended, allowLoss }) {
           </Paper>
         ))}
       </SimpleGrid>
+
+      {/* option-specific: breakeven, delta, total cost */}
+      {isOption && (
+        <Group gap="md" mb="xs">
+          <Text size="xs" c="dimmed">
+            Breakeven <Text span fw={700} c="var(--text)" ff="mono">${trade.breakeven_price.toFixed(2)}</Text>
+          </Text>
+          {trade.delta_at_entry != null && (
+            <Text size="xs" c="dimmed">
+              Delta <Text span fw={700} c="var(--text)" ff="mono">{trade.delta_at_entry.toFixed(2)}</Text>
+            </Text>
+          )}
+          <Text size="xs" c="dimmed">
+            Total cost <Text span fw={700} c="var(--text)" ff="mono">${totalCost.toFixed(0)}</Text>
+            <Text span c="dimmed"> ({trade.shares} × ${trade.entry_price.toFixed(2)} × {trade.multiplier ?? 100})</Text>
+          </Text>
+        </Group>
+      )}
 
       {/* R/R + holding context */}
       <Group gap="md" mb="xs">
@@ -195,14 +234,19 @@ function SuggestTab() {
             <Text c="dimmed" size="sm" py="xs">No suggestions — {result.risk_note}</Text>
           )}
 
-          {result.suggestions.map(trade => (
-            <SuggestionCard
-              key={trade.ticker + trade.direction}
-              trade={trade}
-              isRecommended={result.recommended?.ticker === trade.ticker && result.recommended?.direction === trade.direction}
-              allowLoss={allowLoss}
-            />
-          ))}
+          {result.suggestions.map(trade => {
+            const tradeKey = trade.option_symbol ?? (trade.ticker + trade.direction)
+            const recommendedKey = result.recommended?.option_symbol
+              ?? (result.recommended ? result.recommended.ticker + result.recommended.direction : null)
+            return (
+              <SuggestionCard
+                key={tradeKey}
+                trade={trade}
+                isRecommended={recommendedKey === tradeKey}
+                allowLoss={allowLoss}
+              />
+            )
+          })}
 
           {!result.any_guardrail_triggered && result.risk_note && (
             <Text size="xs" c="dimmed" mt="xs">{result.risk_note}</Text>

@@ -149,11 +149,6 @@ class TradeSuggestionResponse(BaseModel):
     recommended: TradeSetupAny | None
     guardrails_checked: list[str]
     any_guardrail_triggered: bool
-    # Phase 0 shadow mode (intraday-options-pivot-plan.md §7) — the option-equivalent
-    # of each qualifying setup (bullish or bearish), for calibration only. Never
-    # surfaced as a recommendation; suggestions/recommended stay equity-only and
-    # unchanged while this is populated.
-    shadow_option_suggestions: list[OptionTradeSetup] = []
 
 
 # ── DynamoDB trade record ─────────────────────────────────────────────────────
@@ -190,13 +185,8 @@ class PaperTrade(BaseModel):
     volume: int | None = None
     underlying_price_at_entry: float | None = None
     setup_type: str
-    # "shadow_open"/"shadow_closed" (mode="shadow") are Phase 0 calibration-only
-    # records (intraday-options-pivot-plan.md §7) — a distinct status namespace
-    # so they are never picked up by get_open_trades()/get_trades_by_date(),
-    # which drive real guardrails, P&L, and the dashboard. See
-    # dynamo_service.get_shadow_open_trades() / paper_trading_service.log_shadow_trade().
-    status: str  # "pending" | "open" | "closed" | "expired" | "shadow_open" | "shadow_closed"
-    mode: str  # "paper" | "live" | "shadow"
+    status: str  # "pending" | "open" | "closed" | "expired"
+    mode: str  # "paper" | "live"
     limit_price: float | None = None  # Claude's suggested entry; set at placement
     pending_since: str | None = None  # ISO timestamp when order was queued
     entry_time: str | None = None  # ISO timestamp when order filled

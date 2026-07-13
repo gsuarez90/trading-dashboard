@@ -133,22 +133,6 @@ def get_open_trades() -> list[dict]:
     return [_from_item(item) for item in response.get("Items", [])]
 
 
-def get_shadow_open_trades() -> list[dict]:
-    """All shadow (calibration-only) option trades with status='shadow_open'.
-
-    Deliberately a separate status value from 'open' — this query, unlike
-    get_open_trades(), is never consulted by guardrails, get_trades_by_date(),
-    or the real dashboard, so shadow calibration data can never leak into
-    real daily_loss_limit/daily_trade_limit counters or P&L
-    (intraday-options-pivot-plan.md §7).
-    """
-    response = _table().query(
-        IndexName="status-date-index",
-        KeyConditionExpression=Key("status").eq("shadow_open"),
-    )
-    return [_from_item(item) for item in response.get("Items", [])]
-
-
 def get_pending_trades_for_date(date: str) -> list[dict]:
     """All pending (unfilled) orders for a given date. Used by price monitor and EOD handler."""
     response = _table().query(
