@@ -754,6 +754,42 @@ def get_option_chain(
     return contracts
 
 
+def get_option_chains(
+    tickers: list[str],
+    min_dte: int | None = None,
+    max_dte: int | None = None,
+    strikes_around_atm: int = _OPTION_STRIKES_AROUND_ATM,
+) -> dict[str, list[dict]]:
+    """Batched get_option_chain() — one ticker per dict key.
+
+    Schwab's option-chain endpoint doesn't support multi-ticker requests, so
+    this still makes one HTTP call per ticker under the hood, just run in
+    parallel (mirrors get_technical_indicators()'s pattern) and exposed as a
+    single function call. This exists so the Claude tool can price every
+    qualifying ticker's option chain in one round trip instead of one tool
+    call per ticker — with options as the default cash_intraday suggestion,
+    a per-ticker tool call was exhausting the agentic loop's iteration
+    budget on days with several qualifying tickers.
+    """
+    if not tickers:
+        return {}
+
+    def _fetch(ticker: str) -> tuple[str, list[dict]]:
+        try:
+            return ticker, get_option_chain(
+                ticker, min_dte=min_dte, max_dte=max_dte, strikes_around_atm=strikes_around_atm
+            )
+        except Exception:
+            logger.exception("get_option_chains failed for ticker %s", ticker)
+            return ticker, []
+
+    results: dict[str, list[dict]] = {}
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        for ticker, chain in pool.map(_fetch, tickers):
+            results[ticker] = chain
+    return results
+
+
 def get_option_quotes(option_symbols: list[str]) -> list[dict]:
     """Real-time premium quotes for OCC-format option symbols — used by the
     price monitor to check a held option's target/stop against its live

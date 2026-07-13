@@ -36,6 +36,19 @@ def test_build_tools_default_includes_get_option_chain():
     assert "get_option_chain" in names
 
 
+def test_get_option_chain_tool_accepts_a_list_of_tickers():
+    """Regression: get_option_chain must be batchable across every qualifying
+    ticker in one call, not one call per ticker — a per-ticker calling
+    pattern exhausted the agentic loop's iteration budget live in production
+    on days with several qualifying setups."""
+    tools = claude_service._build_tools(include_options=True)
+    tool = next(t for t in tools if t["name"] == "get_option_chain")
+    props = tool["input_schema"]["properties"]
+    assert "tickers" in props
+    assert props["tickers"]["type"] == "array"
+    assert tool["input_schema"]["required"] == ["tickers"]
+
+
 def test_build_tools_kill_switch_excludes_get_option_chain():
     tools = claude_service._build_tools(include_options=False)
     names = [t["name"] for t in tools]
@@ -88,17 +101,17 @@ def test_build_submit_suggestions_tool_equity_only_when_kill_switch_off():
     assert suggestions_schema is claude_service._TRADE_SETUP_SCHEMA
 
 
-def test_execute_tool_get_option_chain_routes_to_schwab_service(monkeypatch):
+def test_execute_tool_get_option_chain_routes_to_batched_schwab_service(monkeypatch):
     captured = {}
 
-    def fake_get_option_chain(ticker):
-        captured["ticker"] = ticker
-        return [{"symbol": "AAPL  260720C00310000", "option_type": "call"}]
+    def fake_get_option_chains(tickers):
+        captured["tickers"] = tickers
+        return {t: [{"symbol": f"{t}  260720C00310000", "option_type": "call"}] for t in tickers}
 
-    monkeypatch.setattr(claude_service.schwab_service, "get_option_chain", fake_get_option_chain)
-    result = claude_service._execute_tool("get_option_chain", {"ticker": "AAPL"})
-    assert captured["ticker"] == "AAPL"
-    assert result == [{"symbol": "AAPL  260720C00310000", "option_type": "call"}]
+    monkeypatch.setattr(claude_service.schwab_service, "get_option_chains", fake_get_option_chains)
+    result = claude_service._execute_tool("get_option_chain", {"tickers": ["AAPL", "NVDA"]})
+    assert captured["tickers"] == ["AAPL", "NVDA"]
+    assert set(result.keys()) == {"AAPL", "NVDA"}
 
 
 def test_guardrail_names_includes_option_checks():

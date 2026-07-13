@@ -102,21 +102,26 @@ _BEARISH_HANDLING_WITH_OPTIONS = """\
 
 _OPTIONS_PRIMARY_SECTION = """
 Options as the default cash_intraday expression (equity fallback for bullish only):
+- Once you know which tickers qualify (bullish or bearish), call get_option_chain ONCE with
+  every qualifying ticker in the same call (it accepts a list) — never call it once per ticker.
+  Each call is a full round trip and the agentic loop has a limited number of turns; calling it
+  per-ticker on a day with several qualifying setups can exhaust that budget before you ever
+  reach submit_trade_suggestions.
 - For a ticker that qualifies bullish (bounce_setup or pullback_setup), the default suggestion
-  is a long CALL, not equity shares. Call get_option_chain(ticker) to source real strikes,
-  premiums, and Greeks — never invent option prices. Select the strike closest to a 0.40-0.60
-  delta (near-the-money) from what get_option_chain actually returns, using the equity entry
-  level described above as the reference underlying price.
-- If no viable call exists for a bullish ticker — get_option_chain returns nothing usable, or
-  every candidate would fail the liquidity/DTE guardrails (option_liquidity_check/
+  is a long CALL, not equity shares. Source real strikes, premiums, and Greeks from
+  get_option_chain's response for that ticker — never invent option prices. Select the strike
+  closest to a 0.40-0.60 delta (near-the-money), using the equity entry level described above
+  as the reference underlying price.
+- If no viable call exists for a bullish ticker — get_option_chain returned nothing usable for
+  it, or every candidate would fail the liquidity/DTE guardrails (option_liquidity_check/
   expiration_proximity) — fall back to the equity long exactly as described above (shares, at
   the stated entry/stop levels, instrument_type="equity") instead of dropping the ticker. A
   good technical setup should never be thrown away just because the options side isn't
   tradeable that day.
 - For a ticker that qualifies bearish (breakdown_setup or pulldown_setup), the suggestion is a
-  long PUT, sourced the same way (get_option_chain, 0.40-0.60 delta near-the-money). There is
-  no equity fallback for bearish — the equity system never shorts — so if no viable put exists,
-  exclude the ticker entirely rather than suggesting anything.
+  long PUT, sourced the same way (0.40-0.60 delta near-the-money). There is no equity fallback
+  for bearish — the equity system never shorts — so if no viable put exists, exclude the ticker
+  entirely rather than suggesting anything.
 - Only use expirations get_option_chain already returned — it only queries the 7-21 day
   window, so every contract you see already clears the floor/ceiling.
 - Size contracts to a $1,000-$6,000 target capital band (scale toward $6k for high
@@ -136,9 +141,10 @@ Options as the default cash_intraday expression (equity fallback for bullish onl
 """
 
 _OPTION_CHAIN_STEP = """\
-5. get_option_chain — once a ticker has qualified via technical_indicators (bullish or \
-bearish) and you're ready to price its call/put suggestion. Never call this to explore \
-randomly.
+5. get_option_chain — once you know every ticker that qualified via technical_indicators \
+(bullish or bearish), call this ONCE with all of them together (it accepts a list of tickers) \
+to price their call/put suggestions. Never call this per-ticker or to explore randomly — \
+one batched call, not several.
 """
 
 _SUGGESTION_SYSTEM = """\
@@ -423,16 +429,23 @@ def _build_tools(include_options: bool = False) -> list[dict]:
                 "name": "get_option_chain",
                 "description": (
                     "Fetch real option-chain contracts (calls and puts, 7-21 days to "
-                    "expiration, near-the-money) for one underlying ticker — strikes, "
-                    "bid/ask, mark, Greeks, open interest, volume. Use this to source real "
+                    "expiration, near-the-money) for one or more underlying tickers in a "
+                    "single call — strikes, bid/ask, mark, Greeks, open interest, volume. "
+                    "Pass every ticker you're seriously considering at once rather than "
+                    "calling this once per ticker — each call is a full round trip, and the "
+                    "agentic loop has a limited number of turns. Use this to source real "
                     "prices for a call/put suggestion; never invent option prices."
                 ),
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "ticker": {"type": "string", "description": "Underlying ticker symbol."}
+                        "tickers": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Underlying ticker symbols to price at once.",
+                        }
                     },
-                    "required": ["ticker"],
+                    "required": ["tickers"],
                 },
             }
         )
@@ -639,7 +652,7 @@ def _execute_tool(name: str, tool_input: dict) -> dict | list:
     if name == "get_quotes":
         return schwab_service.get_batch_quotes(tool_input.get("tickers", []))
     if name == "get_option_chain":
-        return schwab_service.get_option_chain(tool_input.get("ticker", ""))
+        return schwab_service.get_option_chains(tool_input.get("tickers", []))
     raise ValueError(f"Unknown tool: {name}")
 
 
@@ -808,7 +821,17 @@ def suggest_trades(
     tools = _build_tools(include_options=include_options) + [
         _build_submit_suggestions_tool(include_options)
     ]
-    parsed = _agentic_call(system, payload, tools=tools, finish_tool="submit_trade_suggestions")
+    # max_iterations bumped from the default 6 — the options-primary flow adds a
+    # get_option_chain round trip (batched across every qualifying ticker, but
+    # still a real turn) on top of the original movers/technical_indicators/
+    # portfolio/sentiment sequence, and Claude sometimes retries a tool call.
+    parsed = _agentic_call(
+        system,
+        payload,
+        tools=tools,
+        finish_tool="submit_trade_suggestions",
+        max_iterations=10,
+    )
 
     # Inject envelope fields in case Claude omitted them
     parsed.setdefault("goal", seed["daily_goal"])

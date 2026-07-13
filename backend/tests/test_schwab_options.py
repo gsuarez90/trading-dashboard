@@ -11,6 +11,7 @@ calls, no local mocking) — covered in test_schwab_service.py, matching that
 file's existing live-integration convention.
 """
 
+from services import schwab_service
 from services.schwab_service import _normalize_option_contract, closest_listed_strike
 
 
@@ -107,3 +108,40 @@ def test_closest_listed_strike_handles_uneven_increments():
     strikes = [50.0, 50.5, 51.0, 305.0, 310.0, 500.0, 505.0]
     assert closest_listed_strike(50.3, strikes) == 50.5
     assert closest_listed_strike(502.0, strikes) == 500.0
+
+
+# ── get_option_chains (batched) ────────────────────────────────────────────
+# Added after a live production bug: calling get_option_chain once per
+# qualifying ticker exhausted the agentic loop's iteration budget on days
+# with several qualifying setups. get_option_chains lets the Claude tool
+# fetch every ticker's chain in one round trip instead of one per ticker.
+# get_option_chain() itself is live-only (see module docstring) — these
+# tests mock it to isolate get_option_chains()'s batching/error-handling.
+
+
+def test_get_option_chains_returns_dict_keyed_by_ticker(monkeypatch):
+    monkeypatch.setattr(
+        schwab_service,
+        "get_option_chain",
+        lambda ticker, **kwargs: [{"symbol": f"{ticker}_CONTRACT"}],
+    )
+    result = schwab_service.get_option_chains(["AAPL", "NVDA"])
+    assert set(result.keys()) == {"AAPL", "NVDA"}
+    assert result["AAPL"] == [{"symbol": "AAPL_CONTRACT"}]
+    assert result["NVDA"] == [{"symbol": "NVDA_CONTRACT"}]
+
+
+def test_get_option_chains_empty_input():
+    assert schwab_service.get_option_chains([]) == {}
+
+
+def test_get_option_chains_one_ticker_failure_does_not_block_others(monkeypatch):
+    def flaky(ticker, **kwargs):
+        if ticker == "BADTICKER":
+            raise RuntimeError("Schwab error")
+        return [{"symbol": f"{ticker}_CONTRACT"}]
+
+    monkeypatch.setattr(schwab_service, "get_option_chain", flaky)
+    result = schwab_service.get_option_chains(["AAPL", "BADTICKER"])
+    assert result["AAPL"] == [{"symbol": "AAPL_CONTRACT"}]
+    assert result["BADTICKER"] == []
