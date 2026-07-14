@@ -145,7 +145,7 @@ Options as the default cash_intraday expression (equity fallback for bullish onl
   not size up to it. If 15% of cash is larger than the cap, size down to the
   cap instead.
 - Stop loss at approximately -35% of entry premium. Propose a target premium
-  that keeps reward_risk_ratio >= 1.5 as your best estimate — the server
+  that keeps reward_risk_ratio >= 1.0 as your best estimate — the server
   recomputes the actual target from this ticker's real opening-range size and
   volume conviction (see get_technical_indicators' orh/orl/rvol/peak_rvol) and
   the contract's own delta, so your number is a placeholder, not the final
@@ -315,7 +315,7 @@ When generating trade suggestions:
       and the ORL genuinely held (closest_approach_to_orl_pct >= 0) rather than being broken
       and recovered. Entry: at or just above the current price (the SMA(10)/VWAP reclaim
       level, not the original ORH). Stop loss: just below SMA(10) or the lowest price since
-      the breakout, whichever is tighter, while still keeping reward/risk >= 1.5. setup_type:
+      the breakout, whichever is tighter, while still keeping reward/risk >= 1.0. setup_type:
       "pullback_reclaim". Weigh rvol_pct_of_peak, pullback_from_high_pct, and
       closest_approach_to_orl_pct in your confidence — a deep pullback with rvol far
       below its peak is weaker than a shallow one with rvol still elevated, and a
@@ -331,7 +331,7 @@ When generating trade suggestions:
   a bearish view on the Nasdaq is expressed as a long SQQQ trade, not a short. Evaluate TQQQ and
   SQQQ independently against bounce_setup; do not suggest both at once since they are opposing
   bets on the same underlying index.
-- Only suggest reward/risk >= 1.5
+- Only suggest reward/risk >= 1.0
 - Always state stop loss clearly
 - Never suggest selling below cost basis unless allow_loss is true
 - Populate robinhood_instructions with exact plain english steps including

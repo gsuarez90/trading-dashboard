@@ -20,7 +20,7 @@ class TradeSetup(BaseModel):
     shares: int
     expected_gain: float
     max_loss: float
-    reward_risk_ratio: float  # minimum 1.5
+    reward_risk_ratio: float  # minimum 1.0
     confidence: str  # "high" | "medium" | "low"
     rationale: str
     setup_type: str
@@ -97,7 +97,7 @@ class OptionTradeSetup(BaseModel):
     underlying_price_at_entry: float
     expected_gain: float
     max_loss: float
-    reward_risk_ratio: float  # minimum 1.5
+    reward_risk_ratio: float  # minimum 1.0
     confidence: str  # "high" | "medium" | "low"
     rationale: str
     setup_type: str  # "breakout" | "pullback_reclaim" | "breakdown" | "pulldown_reclaim"

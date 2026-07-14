@@ -83,8 +83,8 @@ def _check_cost_basis(trade: TradeSetupAny, ctx: GuardrailContext) -> tuple[bool
 
 
 def _check_reward_risk(trade: TradeSetupAny, ctx: GuardrailContext) -> tuple[bool, str]:
-    if trade.reward_risk_ratio < 1.5:
-        return True, (f"Reward/risk {trade.reward_risk_ratio:.2f} is below minimum 1.5")
+    if trade.reward_risk_ratio < 1.0:
+        return True, (f"Reward/risk {trade.reward_risk_ratio:.2f} is below minimum 1.0")
     return False, ""
 
 
