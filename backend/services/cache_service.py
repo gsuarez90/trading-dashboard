@@ -56,7 +56,7 @@ def _cache_is_fresh(cached_at: str | None) -> bool:
     """True if the cache was written on or after the last expected refresh date.
 
     Replaces the previous today-only check so Friday's cache remains valid
-    through the weekend and Monday pre-market (before the 9:35am refresh fires).
+    through the weekend and Monday pre-market (before the 9:32am refresh fires).
     """
     if not cached_at:
         return False
@@ -118,7 +118,7 @@ def store_live_briefing(briefing_text: str, date: str) -> None:
 
 
 def run_live_briefing_refresh() -> dict:
-    """9:35am ET weekdays — generate morning briefing with live Robinhood portfolio context."""
+    """9:36am ET weekdays — generate morning briefing with live Robinhood portfolio context."""
     logger.info("Live briefing refresh starting")
     try:
         ctx = load_context()

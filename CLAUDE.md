@@ -81,7 +81,8 @@ Cache freshness is ET-date-based (not TTL). `cache_service._cache_is_fresh()` co
 `guardrail_service.check_all(trade, ctx)` runs all 8 checks. Same code path for paper and live. Any triggered rule logs a `guardrail_event` to DynamoDB (appears in `GuardrailsPanel` and in Claude's context on next call). The 14 tests in `test_guardrails.py` are the hard gate before `TRADING_MODE=live`.
 
 ### Scheduled Lambda handlers (in `main.py`)
-- `refresh_handler` → `cache_service.run_daily_refresh()` — 7am ET: Schwab movers + Finnhub sentiment + Claude briefing → DynamoDB cache
+- `refresh_handler` → `cache_service.run_daily_refresh()` — 9:32am ET: Schwab movers + Finnhub sentiment + Claude briefing → DynamoDB cache
+- `refresh_live_briefing_handler` → `cache_service.run_live_briefing_refresh()` — 9:36am ET: live-mode Claude briefing (real Robinhood portfolio) → DynamoDB cache
 - `price_monitor_handler` → `cache_service.run_price_monitor()` — every 5 min market hours: auto-close paper trades at target/stop
 - `end_of_day_handler` → `cache_service.run_end_of_day()` — 3:45pm ET: close all open paper trades, flag live trades
 

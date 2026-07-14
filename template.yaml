@@ -293,7 +293,7 @@ Resources:
             ScheduleExpression: cron(32 9 ? * MON-FRI *)
             ScheduleExpressionTimezone: America/New_York
 
-  # Daily 9:35am ET — live briefing for private URL (3min after DailyRefreshFunction so
+  # Daily 9:36am ET — live briefing for private URL (4min after DailyRefreshFunction so
   # scanner+sentiment are already in DDB when load_context() runs here)
   DailyRefreshLiveBriefingFunction:
     Type: AWS::Serverless::Function
@@ -313,7 +313,7 @@ Resources:
         DailyTriggerV2:
           Type: ScheduleV2
           Properties:
-            ScheduleExpression: cron(35 9 ? * MON-FRI *)
+            ScheduleExpression: cron(36 9 ? * MON-FRI *)
             ScheduleExpressionTimezone: America/New_York
 
   # Nightly analytics — Phase 2 (stub, not active)
