@@ -107,6 +107,22 @@ function OpenRow({ trade, onClose }) {
           {' / '}
           S <Text span ff="mono" c="red">${trade.stop_loss.toFixed(2)}</Text>
         </Text>
+        {trade.current_price != null && (
+          <Text size="xs" c="dimmed">
+            Now{' '}
+            <Text span ff="mono">
+              ${trade.current_price.toFixed(2)}{trade.instrument_type === 'option' ? '/ct' : ''}
+            </Text>
+            {trade.unrealized_pnl != null && (
+              <Text span ff="mono" c={trade.unrealized_pnl >= 0 ? 'green' : 'red'}>
+                {' '}({fmt(trade.unrealized_pnl)}
+                {trade.unrealized_pnl_pct != null &&
+                  `, ${trade.unrealized_pnl_pct >= 0 ? '+' : ''}${trade.unrealized_pnl_pct.toFixed(1)}%`}
+                )
+              </Text>
+            )}
+          </Text>
+        )}
         <Text size="xs" c="dimmed" ml="auto">{fmtTime(trade.entry_time)}</Text>
         <Button
           size="xs"

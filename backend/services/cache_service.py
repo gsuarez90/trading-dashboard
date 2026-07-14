@@ -3,7 +3,7 @@ DynamoDB-backed cache layer + Lambda handler implementations.
 
 Three scheduled jobs:
   run_daily_refresh()   — 9:32am ET: scanner + sentiment + briefing → DynamoDB
-  run_price_monitor()   — every 5 min, market hours: auto-close paper trades at target/stop
+  run_price_monitor()   — every 1 min, market hours: auto-close paper trades at target/stop
   run_end_of_day()      — 3:45pm ET: close all open paper trades, flag live trades
 """
 
@@ -245,6 +245,23 @@ def _price_for_trade(trade: dict, equity_quotes: dict, option_quotes: dict) -> f
     return equity_quotes.get(trade.get("ticker"))
 
 
+def _unrealized_pnl(trade: dict, price: float) -> tuple[float, float | None]:
+    """Mirrors paper_trading_service.close_trade()'s realized_pnl formula, applied
+    to the live (not-yet-exited) price — same direction/multiplier handling."""
+    entry_price = trade["entry_price"]
+    shares = trade["shares"]
+    multiplier = trade.get("multiplier", 1)
+    direction = trade.get("direction", "long")
+
+    if direction == "long":
+        pnl = round((price - entry_price) * shares * multiplier, 2)
+        pct = round((price - entry_price) / entry_price * 100, 2) if entry_price else None
+    else:
+        pnl = round((entry_price - price) * shares * multiplier, 2)
+        pct = round((entry_price - price) / entry_price * 100, 2) if entry_price else None
+    return pnl, pct
+
+
 def run_price_monitor() -> dict:
     """Every 1 min during market hours — fill pending orders + check open trades.
 
@@ -304,6 +321,20 @@ def run_price_monitor() -> dict:
         price = _price_for_trade(trade, equity_quotes, option_quotes)
         if price is None:
             continue
+
+        pnl, pnl_pct = _unrealized_pnl(trade, price)
+        try:
+            dynamo_service.update_trade(
+                trade["trade_id"],
+                {
+                    "current_price": price,
+                    "current_price_updated_at": now_iso,
+                    "unrealized_pnl": pnl,
+                    "unrealized_pnl_pct": pnl_pct,
+                },
+            )
+        except Exception as e:
+            logger.error("Failed to update live price for trade %s: %s", trade["trade_id"], e)
 
         target = trade.get("target_price")
         stop = trade.get("stop_loss")

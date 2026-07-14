@@ -175,6 +175,33 @@ def test_price_monitor_option_uses_premium_not_underlying_price(dynamo_table, mo
     assert record["close_reason"] == "target_hit"
 
 
+def test_price_monitor_persists_live_price_and_unrealized_pnl_when_neither_hit(
+    dynamo_table, monkeypatch
+):
+    """Regression: previously the live quote fetched every cycle was discarded
+    once neither target nor stop fired — the dashboard had no way to show a
+    current contract price. It must now be written to the trade record."""
+    option_trade = _open_and_fill(_make_option_setup(), 8.68)
+
+    monkeypatch.setattr(schwab_service, "get_batch_quotes", lambda tickers: [])
+    monkeypatch.setattr(
+        schwab_service,
+        "get_option_quotes",
+        lambda symbols: [{"option_symbol": "AAPL  260720C00310000", "price": 9.20}],
+    )
+
+    result = cache_service.run_price_monitor()
+    assert result["closed"] == 0
+
+    record = dynamo_service.get_trade(option_trade.trade_id)
+    assert record["status"] == "open"
+    assert record["current_price"] == 9.20
+    assert record["current_price_updated_at"] is not None
+    # long, entry 8.68, shares 6, multiplier 100: (9.20 - 8.68) * 6 * 100
+    assert record["unrealized_pnl"] == 312.0
+    assert record["unrealized_pnl_pct"] == round((9.20 - 8.68) / 8.68 * 100, 2)
+
+
 def test_end_of_day_force_closes_mixed_equity_and_option_trades(dynamo_table, monkeypatch):
     equity_trade = _open_and_fill(_make_equity_setup(), 100.0)
     option_trade = _open_and_fill(_make_option_setup(), 8.68)

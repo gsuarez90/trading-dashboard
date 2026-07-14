@@ -197,6 +197,13 @@ class PaperTrade(BaseModel):
     close_reason: str | None = (
         None  # "target_hit" | "stop_hit" | "manual" | "eod_close" | "kill_switch" | "expired"
     )
+    # Live price while open — refreshed by the price monitor (~every 1 min market
+    # hours); None until the first refresh after fill. Same source as fill/close
+    # (Schwab mark for options, last for equity) — see cache_service._price_for_trade.
+    current_price: float | None = None
+    current_price_updated_at: str | None = None  # ISO timestamp of the last refresh
+    unrealized_pnl: float | None = None
+    unrealized_pnl_pct: float | None = None
 
 
 # ── Daily summary ─────────────────────────────────────────────────────────────
