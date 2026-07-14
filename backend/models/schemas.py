@@ -29,8 +29,11 @@ class TradeSetup(BaseModel):
     current_unrealized_pnl: float | None
     avg_daily_range_pct: float | None
     robinhood_instructions: str  # plain english steps for manual placement
-    ml_probability: float | None  # Phase 2
-    ml_calibration_note: str | None  # Phase 2
+    # Theoretical touch-probability toward target (options only — see
+    # claude_service._compute_option_hit_probability); always None for equity,
+    # informational only, not yet calibrated against real outcomes.
+    ml_probability: float | None
+    ml_calibration_note: str | None  # describes how ml_probability was derived
 
     @model_validator(mode="after")
     def _recompute_gain_risk(self) -> "TradeSetup":
@@ -106,8 +109,13 @@ class OptionTradeSetup(BaseModel):
     current_unrealized_pnl: float | None = None
     avg_daily_range_pct: float | None = None
     robinhood_instructions: str
+    # Theoretical touch-probability toward target, populated server-side by
+    # claude_service._apply_hit_probabilities — informational only, not yet
+    # calibrated against real outcomes. None if the required real data (delta,
+    # implied_volatility from the cached chain, minutes_remaining) wasn't
+    # available when the suggestion was generated.
     ml_probability: float | None = None
-    ml_calibration_note: str | None = None
+    ml_calibration_note: str | None = None  # describes how ml_probability was derived
 
     @model_validator(mode="after")
     def _recompute_gain_risk(self) -> "OptionTradeSetup":

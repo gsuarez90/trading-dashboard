@@ -1,7 +1,9 @@
 import json
 import logging
+import math
 import os
 import re
+from statistics import NormalDist
 
 import anthropic
 
@@ -793,6 +795,17 @@ def _agentic_call(
     raise ValueError(f"Agentic loop exceeded {max_iterations} iterations without a final answer")
 
 
+def _lookup_cached_contract(ticker: str, option_symbol: str, tool_cache: dict) -> dict | None:
+    """Finds a specific contract's real chain data (delta, implied_volatility, etc.)
+    in tool_cache["option_chains"], matched by its OCC symbol. Shared by the
+    target-price and hit-probability calcs so both ground their math in the same
+    real Greeks/IV data Claude was shown, rather than each doing its own lookup."""
+    for contract in tool_cache.get("option_chains", {}).get(ticker, []):
+        if contract.get("symbol") == option_symbol:
+            return contract
+    return None
+
+
 def _compute_option_target_price(setup: dict, tool_cache: dict) -> float | None:
     """Grounds an option's profit target in real market data instead of trusting
     Claude's own arithmetic: today's opening-range size (orh - orl, an ORB-style
@@ -832,11 +845,8 @@ def _compute_option_target_price(setup: dict, tool_cache: dict) -> float | None:
 
     expected_underlying_move = opening_range_size * range_multiple
 
-    delta = None
-    for contract in tool_cache.get("option_chains", {}).get(ticker, []):
-        if contract.get("symbol") == option_symbol:
-            delta = contract.get("delta")
-            break
+    contract = _lookup_cached_contract(ticker, option_symbol, tool_cache)
+    delta = contract.get("delta") if contract else None
     if not delta:
         return None
 
@@ -848,6 +858,76 @@ def _compute_option_target_price(setup: dict, tool_cache: dict) -> float | None:
         return None
 
     return round(entry_price + expected_premium_move, 2)
+
+
+_TRADING_MINUTES_PER_DAY = 390
+_TRADING_DAYS_PER_YEAR = 252
+
+
+def _compute_option_hit_probability(
+    setup: dict, tool_cache: dict, minutes_remaining: float | None
+) -> float | None:
+    """Theoretical probability the option's premium touches target_price before
+    today's session ends — a standard lognormal (Black-Scholes-style) touch
+    probability on the underlying, translated to premium terms via delta.
+
+    Time-scoped to minutes_remaining in TODAY's session, not days_to_expiration
+    — cash_intraday trades always exit same-day regardless of the contract's
+    real expiration, so that's the window that actually matters here. Uses
+    implied volatility (the market's forward-looking expectation), deliberately
+    different from _compute_option_target_price's use of realized/opening-range
+    volatility — the two questions ("how far might it move" vs. "how likely is
+    that move") call for different inputs.
+
+    Purely informational (does not gate anything, does not affect target_price
+    or guardrails) — populates ml_probability for future calibration against
+    real outcomes, per that field's original Phase 2 intent. Returns None if
+    any required real data is unavailable, so callers just leave ml_probability
+    at its default (None) rather than fabricate a number.
+
+    Simplifying assumptions worth remembering when reading this number: zero
+    drift, no gaps/jumps, delta held constant (ignores gamma), and intraday
+    volatility treated as flat across the session (real markets are choppier
+    at the open/close than midday). Treat this as a rough signal, not a
+    calibrated probability, until real outcomes validate it.
+    """
+    if not minutes_remaining or minutes_remaining <= 0:
+        return None
+
+    ticker = setup.get("ticker")
+    option_symbol = setup.get("option_symbol")
+    entry_price = setup.get("entry_price")
+    target_price = setup.get("target_price")
+    underlying_price = setup.get("underlying_price_at_entry")
+    if not ticker or not option_symbol:
+        return None
+    if entry_price is None or target_price is None or not underlying_price or underlying_price <= 0:
+        return None
+
+    contract = _lookup_cached_contract(ticker, option_symbol, tool_cache)
+    if contract is None:
+        return None
+    delta = contract.get("delta")
+    iv_pct = contract.get("implied_volatility")
+    if not delta or iv_pct is None or iv_pct <= 0:
+        return None
+
+    required_move = (target_price - entry_price) / delta
+    required_price = underlying_price + required_move
+    if required_price <= 0:
+        return None
+
+    iv = iv_pct / 100  # Schwab reports IV as a percentage (e.g. 24.5 == 24.5%)
+    t = minutes_remaining / (_TRADING_MINUTES_PER_DAY * _TRADING_DAYS_PER_YEAR)
+    sigma_t = iv * math.sqrt(t)
+    if sigma_t <= 0:
+        return None
+
+    d = (math.log(required_price / underlying_price) + (sigma_t**2) / 2) / sigma_t
+    normal = NormalDist()
+    p_terminal = (1 - normal.cdf(d)) if required_price >= underlying_price else normal.cdf(d)
+
+    return round(min(1.0, 2 * p_terminal), 4)
 
 
 def _apply_profit_targets(parsed: dict, tool_cache: dict) -> None:
@@ -868,6 +948,34 @@ def _apply_profit_targets(parsed: dict, tool_cache: dict) -> None:
         new_target = _compute_option_target_price(setup, tool_cache)
         if new_target is not None:
             setup["target_price"] = new_target
+
+
+def _apply_hit_probabilities(
+    parsed: dict, tool_cache: dict, minutes_remaining: float | None
+) -> None:
+    """Populates ml_probability/ml_calibration_note on every option suggestion
+    with the theoretical touch-probability from _compute_option_hit_probability —
+    informational only, doesn't gate anything or affect target_price/guardrails.
+    Left at their default (None) when the calc can't run. Mutates
+    parsed["suggestions"]/parsed["recommended"] in place, same pattern as
+    _apply_profit_targets.
+    """
+    setups = list(parsed.get("suggestions") or [])
+    recommended = parsed.get("recommended")
+    if isinstance(recommended, dict):
+        setups.append(recommended)
+
+    for setup in setups:
+        if not isinstance(setup, dict) or setup.get("instrument_type") != "option":
+            continue
+        probability = _compute_option_hit_probability(setup, tool_cache, minutes_remaining)
+        if probability is not None:
+            setup["ml_probability"] = probability
+            setup["ml_calibration_note"] = (
+                f"Theoretical touch-probability toward target (lognormal, IV-scaled to "
+                f"{minutes_remaining} min remaining today). Not yet calibrated against "
+                f"real outcomes."
+            )
 
 
 def _build_briefing_system(
@@ -1002,6 +1110,9 @@ def suggest_trades(
     # before validation — _recompute_gain_risk then derives expected_gain/
     # max_loss/reward_risk_ratio from this number, not Claude's own estimate.
     _apply_profit_targets(parsed, tool_cache)
+    # Populate ml_probability (informational only, doesn't gate anything) using
+    # the corrected target_price above — must run after _apply_profit_targets.
+    _apply_hit_probabilities(parsed, tool_cache, seed.get("minutes_remaining"))
 
     suggestion = TradeSuggestionResponse.model_validate(parsed)
 

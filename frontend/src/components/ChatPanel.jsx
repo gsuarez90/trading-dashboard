@@ -112,6 +112,19 @@ function SuggestionCard({ trade, isRecommended, allowLoss }) {
         <Text size="xs" c="dimmed">
           R/R <Text span fw={700} c="var(--text)">{trade.reward_risk_ratio.toFixed(2)}</Text>
         </Text>
+        {trade.ml_probability != null && (
+          <Text size="xs" c="dimmed">
+            Hit prob{' '}
+            <Text
+              span
+              fw={700}
+              ff="mono"
+              c={trade.ml_probability >= 0.5 ? 'green' : trade.ml_probability >= 0.3 ? 'yellow' : 'red'}
+            >
+              {(trade.ml_probability * 100).toFixed(0)}%
+            </Text>
+          </Text>
+        )}
         {trade.uses_existing_holding && trade.cost_basis != null && (
           <Text size="xs" c="dimmed">
             Cost basis <Text span fw={700} c="var(--text)" ff="mono">${trade.cost_basis.toFixed(2)}</Text>

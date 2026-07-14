@@ -338,3 +338,128 @@ def test_build_briefing_system_kill_switch_reverts_to_avoid_bearish():
     )
     assert "structure to avoid" in system
     assert "long PUT candidate" not in system
+
+
+# ── Hit-probability calc (2026-07-14): theoretical touch-probability toward
+# target, informational only, populates the Phase 2 ml_probability field ─────
+
+
+def _call_setup(**overrides):
+    setup = {
+        "ticker": "NOW",
+        "option_symbol": "NOW   260724C00107000",
+        "instrument_type": "option",
+        "entry_price": 6.47,
+        "target_price": 10.56,
+        "underlying_price_at_entry": 107.0,
+    }
+    setup.update(overrides)
+    return setup
+
+
+def _call_tool_cache(delta=0.54, iv=100.0):
+    return {
+        "option_chains": {
+            "NOW": [{"symbol": "NOW   260724C00107000", "delta": delta, "implied_volatility": iv}]
+        }
+    }
+
+
+def test_compute_option_hit_probability_matches_hand_derived_value():
+    # Same numbers as the worked example discussed with the user: ~12.4%
+    # touch probability for a ~$7.57 required underlying move in 200 minutes
+    # at 100% IV.
+    p = claude_service._compute_option_hit_probability(
+        _call_setup(), _call_tool_cache(), minutes_remaining=200
+    )
+    assert p == 0.1239
+
+
+def test_compute_option_hit_probability_increases_with_more_time_remaining():
+    p_30 = claude_service._compute_option_hit_probability(
+        _call_setup(), _call_tool_cache(), minutes_remaining=30
+    )
+    p_200 = claude_service._compute_option_hit_probability(
+        _call_setup(), _call_tool_cache(), minutes_remaining=200
+    )
+    p_390 = claude_service._compute_option_hit_probability(
+        _call_setup(), _call_tool_cache(), minutes_remaining=390
+    )
+    assert p_30 < p_200 < p_390
+
+
+def test_compute_option_hit_probability_handles_put_direction_via_signed_delta():
+    """Puts have negative delta and profit on a DOWN move — the required-move
+    formula must use signed (not abs) delta so this resolves correctly without
+    a separate call/put branch."""
+    put_setup = {
+        "ticker": "SQQQ",
+        "option_symbol": "SQQQ  260724P00012000",
+        "instrument_type": "option",
+        "entry_price": 1.20,
+        "target_price": 1.50,
+        "underlying_price_at_entry": 12.0,
+    }
+    put_cache = {
+        "option_chains": {
+            "SQQQ": [
+                {"symbol": "SQQQ  260724P00012000", "delta": -0.45, "implied_volatility": 100.0}
+            ]
+        }
+    }
+    p = claude_service._compute_option_hit_probability(put_setup, put_cache, minutes_remaining=200)
+    assert p == 0.2133
+
+
+def test_compute_option_hit_probability_none_without_minutes_remaining():
+    assert (
+        claude_service._compute_option_hit_probability(_call_setup(), _call_tool_cache(), None)
+        is None
+    )
+    assert (
+        claude_service._compute_option_hit_probability(_call_setup(), _call_tool_cache(), 0) is None
+    )
+
+
+def test_compute_option_hit_probability_none_without_cached_contract():
+    p = claude_service._compute_option_hit_probability(
+        _call_setup(), {"option_chains": {}}, minutes_remaining=200
+    )
+    assert p is None
+
+
+def test_compute_option_hit_probability_none_without_implied_volatility():
+    p = claude_service._compute_option_hit_probability(
+        _call_setup(), _call_tool_cache(iv=None), minutes_remaining=200
+    )
+    assert p is None
+
+
+def test_compute_option_hit_probability_none_with_zero_delta():
+    p = claude_service._compute_option_hit_probability(
+        _call_setup(), _call_tool_cache(delta=0), minutes_remaining=200
+    )
+    assert p is None
+
+
+def test_apply_hit_probabilities_sets_ml_fields_on_option_not_equity():
+    option_setup = _call_setup()
+    equity_setup = {"instrument_type": "equity", "ticker": "AAPL"}
+    parsed = {"suggestions": [option_setup, equity_setup], "recommended": dict(option_setup)}
+
+    claude_service._apply_hit_probabilities(parsed, _call_tool_cache(), minutes_remaining=200)
+
+    assert parsed["suggestions"][0]["ml_probability"] == 0.1239
+    assert "ml_calibration_note" in parsed["suggestions"][0]
+    assert "not yet calibrated" in parsed["suggestions"][0]["ml_calibration_note"].lower()
+    assert "ml_probability" not in parsed["suggestions"][1]  # equity untouched
+    assert parsed["recommended"]["ml_probability"] == 0.1239
+
+
+def test_apply_hit_probabilities_leaves_ml_probability_unset_when_data_missing():
+    option_setup = _call_setup()
+    parsed = {"suggestions": [option_setup], "recommended": None}
+
+    claude_service._apply_hit_probabilities(parsed, {"option_chains": {}}, minutes_remaining=200)
+
+    assert "ml_probability" not in parsed["suggestions"][0]
