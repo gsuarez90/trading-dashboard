@@ -310,3 +310,31 @@ def test_apply_profit_targets_falls_back_to_claudes_target_when_data_missing():
     claude_service._apply_profit_targets(parsed, tool_cache)
 
     assert parsed["suggestions"][0]["target_price"] == 13.02  # unchanged
+
+
+# ── Morning briefing: must reflect the options-primary strategy, not the
+# pre-pivot equity-only "bearish = avoid" framing (2026-07-14) ────────────────
+
+
+def test_build_briefing_system_default_treats_bearish_as_put_candidate():
+    system = claude_service._build_briefing_system("cash_intraday", "holdings_only", 100)
+    assert "long PUT candidate" in system
+    assert "breakdown_setup" in system
+    assert "pulldown_setup" in system
+    assert "not something to avoid" in system
+    # legacy avoid-bearish framing must not leak into the options-primary text
+    assert "structure to avoid" not in system
+
+
+def test_build_briefing_system_mentions_bullish_setups():
+    system = claude_service._build_briefing_system("cash_intraday", "holdings_only", 100)
+    assert "bounce_setup" in system
+    assert "pullback_setup" in system
+
+
+def test_build_briefing_system_kill_switch_reverts_to_avoid_bearish():
+    system = claude_service._build_briefing_system(
+        "cash_intraday", "holdings_only", 100, include_options=False
+    )
+    assert "structure to avoid" in system
+    assert "long PUT candidate" not in system

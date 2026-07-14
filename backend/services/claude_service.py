@@ -52,11 +52,26 @@ Produce a concise morning briefing:
 5. Holdings overlapping with today's setups
 6. Honest assessment — if today looks poor for trading, say so
 
-If profit_mode is cash_intraday, assess opening range setups via the 5-min technical_indicators:
-note which tickers have bounce_setup=true (5-min open/close above ORH + above VWAP/SMA(10)/SMA(20)) as
-primary long candidates. Flag any ticker where price_below_orl=true as a structure to avoid.
+If profit_mode is cash_intraday, assess opening range setups via the 5-min technical_indicators.
+A ticker qualifies bullish via bounce_setup (fresh breakout: 5-min open/close above ORH, plus
+price above VWAP/SMA(10)/SMA(20)) or pullback_setup (already broke out, cooled off, still holding
+above VWAP/SMA(10)/SMA(20)) — note these among today's top setups.
+{bearish_handling}
 Never suggest selling below cost basis unless allow_loss is true.
 Plain text only, no markdown.\
+"""
+
+_BRIEFING_BEARISH_WITH_OPTIONS = """\
+A ticker qualifies bearish via breakdown_setup (fresh breakdown) or pulldown_setup (already broke
+down, bounced partway, still holding below VWAP/SMA(10)/SMA(20)) — the mirror image below the ORL.
+Bearish structure is not something to avoid: since the options pivot it's a long PUT candidate,
+exactly as bullish structure is a long CALL candidate. Note qualifying setups from both directions
+among today's top setups, not just bullish ones.\
+"""
+
+_BRIEFING_BEARISH_EQUITY_ONLY = """\
+Flag any ticker where price_below_orl=true as a structure to avoid — the equity-only system never
+shorts, so bearish structure has no actionable trade here.\
 """
 
 _CHAT_SYSTEM = """\
@@ -855,9 +870,27 @@ def _apply_profit_targets(parsed: dict, tool_cache: dict) -> None:
             setup["target_price"] = new_target
 
 
+def _build_briefing_system(
+    profit_mode: str,
+    trade_scope: str,
+    goal_dollars: int,
+    include_options: bool | None = None,
+) -> str:
+    if include_options is None:
+        include_options = _include_options_suggestions()
+    return _BRIEFING_SYSTEM.format(
+        profit_mode=profit_mode,
+        trade_scope=trade_scope,
+        goal_dollars=goal_dollars,
+        bearish_handling=(
+            _BRIEFING_BEARISH_WITH_OPTIONS if include_options else _BRIEFING_BEARISH_EQUITY_ONLY
+        ),
+    )
+
+
 def morning_briefing(ctx: DailyContext) -> str:
     """Return a plain-text morning briefing from Claude given the full daily context."""
-    system = _BRIEFING_SYSTEM.format(
+    system = _build_briefing_system(
         profit_mode=ctx.profit_mode,
         trade_scope=ctx.trade_scope,
         goal_dollars=int(ctx.daily_goal),
