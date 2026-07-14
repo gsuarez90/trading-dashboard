@@ -357,18 +357,42 @@ def _compute_indicators_from_candles(candles: list[dict]) -> dict | None:
     rather than waiting for N complete periods — the same convention Robinhood's
     own charts use. Early readings are naturally less "settled" (closer to the
     seed value) until enough bars have accumulated, which is expected EMA
-    behavior, not a defect.
+    behavior, not a defect. EMA(3)/EMA(6) are computed and returned for
+    reference only — they no longer drive bounce_setup/pullback_setup/
+    breakdown_setup/pulldown_setup. That momentum role is now SMA(10)/SMA(20)
+    (see below).
+
+    SMA(10) and SMA(20) are true N-period simple moving averages on the raw
+    1-min candle closes (not the 5-min buckets EMA uses) — sma_10 requires at
+    least 10 one-min candles and sma_20 requires at least 20, returning None
+    before then. price_above_sma_10/price_above_sma_20 (and the below_
+    counterparts) are None-safe: if the relevant SMA isn't ready yet, both
+    directions read False rather than raising, so every setup boolean below
+    simply can't qualify yet (not an error) for a ticker queried in its first
+    ~20 minutes — the opening range alone (5 candles) is not enough runway
+    for this momentum signal, by design. sma_10_above_sma_20/
+    sma_10_below_sma_20 are also returned, informational only: price clearing
+    both SMAs will almost always mean the faster SMA(10) has already crossed
+    above SMA(20) too, so this isn't used as a separate gate — it's tracked
+    to see empirically how often that assumption actually holds.
+
+    A fresh setup (bounce_setup/breakdown_setup) requires the *current 5-min
+    bucket's own open AND close* to both clear the opening range level (not
+    just the latest 1-min print) — a stricter breakout confirmation than a
+    single tick poking through — plus price above (or below) VWAP, SMA(10),
+    and SMA(20) all at once. No moving-average crossover check; simple
+    price-position confirmation against three reference lines.
 
     bars_since_breakout/pullback_setup identify a second, later entry pattern:
     a ticker that already broke the ORH earlier today, has since pulled back,
-    but is still holding above EMA(6)/VWAP with positive EMA momentum — as
-    distinct from bounce_setup, which only qualifies a ticker still at/above
-    the ORH right now. pullback_setup additionally requires
-    closest_approach_to_orl_pct >= 0 — the ORL must have actually held at its
-    worst point, not just been approached. price_below_orl alone isn't enough
-    to catch this: it only checks the *current* price, so a ticker that broke
-    below the ORL intraminute and has since recovered would otherwise still
-    qualify as if support had cleanly held.
+    but is still holding above VWAP/SMA(10)/SMA(20) — as distinct from
+    bounce_setup, which only qualifies a ticker still breaking out right now.
+    pullback_setup additionally requires closest_approach_to_orl_pct >= 0 —
+    the ORL must have actually held at its worst point, not just been
+    approached. price_below_orl alone isn't enough to catch this: it only
+    checks the *current* price, so a ticker that broke below the ORL
+    intraminute and has since recovered would otherwise still qualify as if
+    support had cleanly held.
 
     breakdown_setup/pulldown_setup are the bearish mirror of the above,
     added for the options pivot (intraday-options-pivot-plan.md §3.1) — same
@@ -386,11 +410,13 @@ def _compute_indicators_from_candles(candles: list[dict]) -> dict | None:
     complete). Otherwise returns:
     {
         orh, orl,                        # opening range high/low (9:30-9:35am)
-        ema_3, ema_6, vwap, rvol, peak_rvol, rvol_pct_of_peak,
+        ema_3, ema_6, sma_10, sma_20, vwap, rvol, peak_rvol, rvol_pct_of_peak,
         pullback_from_high_pct, closest_approach_to_orl_pct, bars_since_breakout,
         peak_rvol_down, rvol_pct_of_peak_down, bounce_from_low_pct,
         closest_approach_to_orh_pct, bars_since_breakdown,
         ema_3_above_ema_6, ema_3_below_ema_6, price_above_vwap, price_below_vwap,
+        price_above_sma_10, price_below_sma_10, price_above_sma_20, price_below_sma_20,
+        sma_10_above_sma_20, sma_10_below_sma_20,
         price_above_orh, price_below_orl,
         current_price, bounce_setup, pullback_setup,
         breakdown_setup, pulldown_setup
@@ -406,6 +432,7 @@ def _compute_indicators_from_candles(candles: list[dict]) -> dict | None:
     bucket_highs = [max(float(c["high"]) for c in b) for b in buckets]
     bucket_lows = [min(float(c["low"]) for c in b) for b in buckets]
     bucket_closes = [float(b[-1]["close"]) for b in buckets]
+    bucket_opens = [float(b[0]["open"]) for b in buckets]
 
     orh = round(bucket_highs[0], 2)
     orl = round(min(float(c["low"]) for c in buckets[0]), 2)
@@ -442,6 +469,18 @@ def _compute_indicators_from_candles(candles: list[dict]) -> dict | None:
     )
 
     current = closes[-1]
+
+    # SMA(10)/SMA(20) — true N-period simple moving averages on the raw
+    # 1-min closes (not the 5-min buckets EMA uses). Unlike EMA, these
+    # require the full window and return None before it — no seeded early
+    # approximation.
+    def _sma(period: int) -> float | None:
+        if len(closes) < period:
+            return None
+        return round(sum(closes[-period:]) / period, 4)
+
+    sma_10 = _sma(10)
+    sma_20 = _sma(20)
 
     def _rvol_at(i: int) -> float | None:
         """RVOL as of candle i — candle i's volume vs a weighted baseline of
@@ -548,15 +587,48 @@ def _compute_indicators_from_candles(candles: list[dict]) -> dict | None:
     ema_3_below_ema_6 = ema3 < ema6
     price_above_vwap = vwap is not None and current > vwap
     price_below_vwap = vwap is not None and current < vwap
-    bounce_setup = ema_3_above_ema_6 and vwap is not None and current > vwap and current >= orh
-    breakdown_setup = ema_3_below_ema_6 and price_below_vwap and current <= orl
+
+    # None-safe: an SMA that hasn't warmed up yet (fewer than 10/20 one-min
+    # candles) reads False in both directions, so every setup below simply
+    # can't qualify yet rather than raising.
+    price_above_sma_10 = sma_10 is not None and current > sma_10
+    price_below_sma_10 = sma_10 is not None and current < sma_10
+    price_above_sma_20 = sma_20 is not None and current > sma_20
+    price_below_sma_20 = sma_20 is not None and current < sma_20
+
+    # Informational only — not a setup gate. See docstring: price already
+    # clearing both SMAs will almost always imply this too; tracked to
+    # validate that assumption against real data over time.
+    sma_10_above_sma_20 = sma_10 is not None and sma_20 is not None and sma_10 > sma_20
+    sma_10_below_sma_20 = sma_10 is not None and sma_20 is not None and sma_10 < sma_20
+
+    bucket_open = bucket_opens[-1]
+    bucket_close = bucket_closes[-1]
+
+    bounce_setup = (
+        bucket_open > orh
+        and bucket_close > orh
+        and current > orh
+        and price_above_vwap
+        and price_above_sma_10
+        and price_above_sma_20
+    )
+    breakdown_setup = (
+        bucket_open < orl
+        and bucket_close < orl
+        and current < orl
+        and price_below_vwap
+        and price_below_sma_10
+        and price_below_sma_20
+    )
 
     pullback_setup = (
         bars_since_breakout is not None
         and not bounce_setup
         and not price_below_orl
-        and ema_3_above_ema_6
-        and (current >= ema6 or price_above_vwap)
+        and price_above_vwap
+        and price_above_sma_10
+        and price_above_sma_20
         # the ORL must have actually held, not just been approached — a ticker
         # that broke below it intraminute and recovered is a structural
         # breakdown-and-bounce, not a "support held" continuation, even
@@ -569,8 +641,9 @@ def _compute_indicators_from_candles(candles: list[dict]) -> dict | None:
         bars_since_breakdown is not None
         and not breakdown_setup
         and not price_above_orh
-        and ema_3_below_ema_6
-        and (current <= ema6 or price_below_vwap)
+        and price_below_vwap
+        and price_below_sma_10
+        and price_below_sma_20
         # mirrors pullback_setup's ORL guard: the ORH must have actually
         # held (never reclaimed), not just been approached
         and closest_approach_to_orh_pct is not None
@@ -582,6 +655,8 @@ def _compute_indicators_from_candles(candles: list[dict]) -> dict | None:
         "orl": orl,
         "ema_3": ema3,
         "ema_6": ema6,
+        "sma_10": sma_10,
+        "sma_20": sma_20,
         "vwap": vwap,
         "rvol": rvol,
         "peak_rvol": peak_rvol,
@@ -599,6 +674,12 @@ def _compute_indicators_from_candles(candles: list[dict]) -> dict | None:
         "ema_3_below_ema_6": ema_3_below_ema_6,
         "price_above_vwap": price_above_vwap,
         "price_below_vwap": price_below_vwap,
+        "price_above_sma_10": price_above_sma_10,
+        "price_below_sma_10": price_below_sma_10,
+        "price_above_sma_20": price_above_sma_20,
+        "price_below_sma_20": price_below_sma_20,
+        "sma_10_above_sma_20": sma_10_above_sma_20,
+        "sma_10_below_sma_20": sma_10_below_sma_20,
         "price_above_orh": price_above_orh,
         "price_below_orl": price_below_orl,
         "bounce_setup": bounce_setup,

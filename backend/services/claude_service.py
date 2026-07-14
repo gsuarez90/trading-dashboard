@@ -53,7 +53,7 @@ Produce a concise morning briefing:
 6. Honest assessment — if today looks poor for trading, say so
 
 If profit_mode is cash_intraday, assess opening range setups via the 5-min technical_indicators:
-note which tickers have bounce_setup=true (price above ORH + EMA(3) > EMA(6) + above VWAP) as
+note which tickers have bounce_setup=true (5-min open/close above ORH + above VWAP/SMA(10)/SMA(20)) as
 primary long candidates. Flag any ticker where price_below_orl=true as a structure to avoid.
 Never suggest selling below cost basis unless allow_loss is true.
 Plain text only, no markdown.\
@@ -191,7 +191,12 @@ When generating trade suggestions:
 - Use technical_indicators (5-min intraday) for setup qualification. Each ticker entry contains:
     orh: Opening Range High — high of the 9:30-9:35am opening candle (key support level)
     orl: Opening Range Low  — low of the 9:30-9:35am opening candle (breakdown level)
-    ema_3, ema_6: exponential moving averages across all 5-min closes today
+    ema_3, ema_6: exponential moving averages across all 5-min closes today —
+      reference only, they do not drive any setup below.
+    sma_10, sma_20: true 10/20-period simple moving averages on 1-min closes.
+      null until enough 1-min candles have printed (10 for sma_10, 20 for
+      sma_20) — typically within the first ~20 minutes of the session. These
+      drive setup qualification below, alongside VWAP.
     vwap: cumulative volume-weighted average price since open
     rvol: current 1-min candle's volume vs the average volume per 1-min candle
       since the opening range. rvol above ~1 means volume is keeping pace with
@@ -221,30 +226,43 @@ When generating trade suggestions:
       both show the same pullback_from_high_pct right now.
     bars_since_breakout: number of completed 5-min bars since price first
       closed above the ORH today (null if it hasn't broken out yet). A higher
-      number with price still holding well above VWAP/EMA(6) suggests a
-      mature, still-valid trend rather than a stale or failed breakout.
-    ema_3_above_ema_6: boolean — short-term momentum is up
-    price_above_vwap: boolean — day is net-bullish for this name
+      number with price still holding well above VWAP/SMA(10)/SMA(20) suggests
+      a mature, still-valid trend rather than a stale or failed breakout.
+    price_above_vwap, price_above_sma_10, price_above_sma_20 (and the
+      price_below_ counterparts): boolean, None-safe — if an SMA hasn't
+      warmed up yet (fewer than 10 or 20 one-min candles today), both
+      directions read false, so no setup below can qualify yet.
+    sma_10_above_sma_20, sma_10_below_sma_20: informational only, do not
+      gate any setup — whether the faster SMA has crossed the slower one.
+      Clearing VWAP/SMA(10)/SMA(20) on price alone will almost always imply
+      this too; it's tracked separately to see how often that actually holds.
     price_above_orh: boolean — price has broken above the opening range high
     price_below_orl: boolean — price has broken below the opening range low (bearish)
-    bounce_setup: boolean — true when EMA(3) > EMA(6), price > VWAP, and price >= ORH.
-      This is the fresh-breakout pattern: price is at or above the ORH right now.
+    bounce_setup: boolean — true when the current 5-min bucket's own open AND
+      close are both above the ORH, current price is above the ORH, and price
+      is above VWAP, SMA(10), and SMA(20) all at once. No moving-average
+      crossover check — simple price-position confirmation against all three
+      reference lines, plus the stricter bucket-open+close breakout requirement
+      (not just a single 1-min tick poking through).
     pullback_setup: boolean — true when the ticker broke the ORH earlier today
-      (bars_since_breakout is not null) but has since pulled back below it, while
-      still holding above EMA(6) or VWAP with EMA(3) > EMA(6), and without breaking
-      down through the ORL. This is the "already ran, cooled off, but still
-      structurally bullish" pattern — use it for tickers whose original breakout
-      numbers (rvol, range) have decayed by the time you're evaluating them, but
-      the day's trend is still intact.
+      (bars_since_breakout is not null) but has since pulled back below it,
+      while price is still above VWAP, SMA(10), and SMA(20), and without
+      breaking down through the ORL. This is the "already ran, cooled off, but
+      still structurally bullish" pattern — use it for tickers whose original
+      breakout numbers (rvol, range) have decayed by the time you're evaluating
+      them, but the day's trend is still intact.
     breakdown_setup: boolean — the bearish mirror of bounce_setup: true when
-      EMA(3) < EMA(6), price < VWAP, and price <= ORL. This is the fresh-breakdown
-      pattern: price is at or below the ORL right now (ORL becomes resistance on a
-      failed retest, mirroring "ORH becomes support" for bounce_setup).
-    pulldown_setup: boolean — the bearish mirror of pullback_setup: true when the
-      ticker broke down through the ORL earlier today (bars_since_breakdown is not
-      null) but has since bounced partway back up, while still holding below EMA(6)
-      or VWAP with EMA(3) < EMA(6), and without reclaiming back above the ORH. This
-      is the "already broke down, bounced, but still structurally bearish" pattern.
+      the current 5-min bucket's own open AND close are both below the ORL,
+      current price is below the ORL, and price is below VWAP, SMA(10), and
+      SMA(20) all at once. This is the fresh-breakdown pattern (ORL becomes
+      resistance on a failed retest, mirroring "ORH becomes support" for
+      bounce_setup).
+    pulldown_setup: boolean — the bearish mirror of pullback_setup: true when
+      the ticker broke down through the ORL earlier today (bars_since_breakdown
+      is not null) but has since bounced partway back up, while price is still
+      below VWAP, SMA(10), and SMA(20), and without reclaiming back above the
+      ORH. This is the "already broke down, bounced, but still structurally
+      bearish" pattern.
     bars_since_breakdown, peak_rvol_down, rvol_pct_of_peak_down, bounce_from_low_pct,
       closest_approach_to_orh_pct: literal bearish mirrors of bars_since_breakout,
       peak_rvol, rvol_pct_of_peak, pullback_from_high_pct, and
@@ -258,7 +276,7 @@ When generating trade suggestions:
   Treat an IONZ bounce_setup with more skepticism if IONQ isn't confirming —
   IONZ is a small, thinly-traded fund where its own tape can be noisy.
 - IONZ macro-day priority: check SPY and QQQ's own technical_indicators. If SPY or
-  QQQ show price_above_vwap=false or ema_3_above_ema_6=false (a "down" day), or
+  QQQ show price_above_vwap=false or price_above_sma_10=false (a "down" day), or
   price is trading in a tight range close to today's open (a "sideways" day), and
   IONZ independently qualifies via its own bounce_setup or breakdown_setup (never
   relaxed — IONZ must still clear its own technical gate like every other ticker),
@@ -269,15 +287,16 @@ When generating trade suggestions:
 - ONLY suggest LONG trades in `suggestions`. No short setups.
 - The catalyst for every long is the opening 5-min candle. A valid long setup requires
   bounce_setup=true OR pullback_setup=true:
-    * bounce_setup=true (fresh breakout): price broke above the ORH and is holding at or
-      above it (ORH becomes support), EMA momentum is positive, and the stock is above VWAP.
-      Entry: at or just above the ORH. Stop loss: just below the ORL. setup_type: "breakout".
+    * bounce_setup=true (fresh breakout): the 5-min bucket's own open and close are both
+      above the ORH, price is holding at or above it (ORH becomes support), and price is
+      above VWAP, SMA(10), and SMA(20). Entry: at or just above the ORH. Stop loss: just
+      below the ORL. setup_type: "breakout".
     * pullback_setup=true (pullback/reclaim): the ticker already broke out earlier today and
-      has since cooled off, but is still holding above EMA(6)/VWAP with positive EMA momentum,
+      has since cooled off, but price is still holding above VWAP, SMA(10), and SMA(20),
       and the ORL genuinely held (closest_approach_to_orl_pct >= 0) rather than being broken
-      and recovered. Entry: at or just above the current price (the EMA(6)/VWAP reclaim level,
-      not the original ORH). Stop loss: just below EMA(6) or the lowest price since the
-      breakout, whichever is tighter, while still keeping reward/risk >= 1.5. setup_type:
+      and recovered. Entry: at or just above the current price (the SMA(10)/VWAP reclaim
+      level, not the original ORH). Stop loss: just below SMA(10) or the lowest price since
+      the breakout, whichever is tighter, while still keeping reward/risk >= 1.5. setup_type:
       "pullback_reclaim". Weigh rvol_pct_of_peak, pullback_from_high_pct, and
       closest_approach_to_orl_pct in your confidence — a deep pullback with rvol far
       below its peak is weaker than a shallow one with rvol still elevated, and a
@@ -398,7 +417,7 @@ def _build_tools(include_options: bool = False) -> list[dict]:
         {
             "name": "get_technical_indicators",
             "description": (
-                "Fetch 5-min opening range indicators (ORH, ORL, EMA(3), EMA(6), VWAP, "
+                "Fetch 5-min opening range indicators (ORH, ORL, SMA(10), SMA(20), VWAP, "
                 "RVOL, bounce_setup) for a list of tickers. Always include TQQQ, SQQQ, IONZ, "
                 "IONQ, NVDA, and SPCX. Call get_top_movers first, then pass those tickers plus "
                 "TQQQ, SQQQ, IONZ, IONQ, NVDA, and SPCX here. IONQ is also fetched automatically "
