@@ -124,13 +124,17 @@ Options as the default cash_intraday expression (equity fallback for bullish onl
   entirely rather than suggesting anything.
 - Only use expirations get_option_chain already returned — it only queries the 7-21 day
   window, so every contract you see already clears the floor/ceiling.
-- Size contracts to a $1,000-$6,000 target capital band (scale toward $6k for high
-  confidence, toward $1k for lower confidence): contracts = floor(target_dollars /
-  (premium * 100)). This target band is what determines contract count — not the
-  position size cap. The cap is a separate backstop that may allow a larger position;
-  do not size up to it. If the cap is smaller than $1,000, size down to the cap instead.
-- Stop loss at approximately -35% of entry premium; pick a target premium that keeps
-  reward_risk_ratio >= 1.5 (same minimum as equity).
+- Size contracts to 15% of available cash: contracts = floor((cash * 0.15) /
+  (premium * 100)). This is what determines contract count — not the position
+  size cap. The cap is a separate backstop that may allow a larger position; do
+  not size up to it. If 15% of cash is larger than the cap, size down to the
+  cap instead.
+- Stop loss at approximately -35% of entry premium. Propose a target premium
+  that keeps reward_risk_ratio >= 1.5 as your best estimate — the server
+  recomputes the actual target from this ticker's real opening-range size and
+  volume conviction (see get_technical_indicators' orh/orl/rvol/peak_rvol) and
+  the contract's own delta, so your number is a placeholder, not the final
+  value used.
 - multiplier is always 100 for options (1 for the equity fallback) — set instrument_type
   correctly ("option" vs "equity"), it determines how every downstream guardrail and P&L
   calculation scales.
@@ -184,10 +188,10 @@ When generating trade suggestions:
   just to hit this number — it's fine to suggest a trade below $200 if no
   qualifying setup can reach it within the risk limits.
 - OPTION sizing is completely different and does NOT follow the $200/
-  max-the-cap rule above — an option suggestion targets the $1,000-$6,000
-  capital band described in the options rules below, regardless of how much
-  cap headroom is available. Do not size an option position to use up the
-  position size cap; the cap is only a backstop, never the target.
+  max-the-cap rule above — an option suggestion targets 15% of available cash
+  as described in the options rules below, regardless of how much cap headroom
+  is available. Do not size an option position to use up the position size
+  cap; the cap is only a backstop, never the target.
 - Use technical_indicators (5-min intraday) for setup qualification. Each ticker entry contains:
     orh: Opening Range High — high of the 9:30-9:35am opening candle (key support level)
     orl: Opening Range Low  — low of the 9:30-9:35am opening candle (breakdown level)
@@ -690,7 +694,7 @@ def _agentic_call(
     tools: list[dict],
     finish_tool: str | None = None,
     max_iterations: int = 6,
-) -> str | dict:
+) -> tuple[str | dict, dict]:
     """Run the Anthropic tool-use agentic loop.
 
     Claude receives the seed payload and may emit tool_use blocks. If finish_tool is
@@ -702,9 +706,16 @@ def _agentic_call(
     Lambda timeout. The end_turn nudge below is a defensive fallback in case Claude
     still stops without calling anything. Without finish_tool, the final end_turn
     text is returned normally.
+
+    Also returns a tool_cache — {"technical_indicators": {ticker: {...}},
+    "option_chains": {ticker: [...]}} — accumulated from get_technical_indicators/
+    get_option_chain results as Claude fetches them. This lets the caller ground a
+    deterministic calculation (e.g. a profit target) in the exact real market data
+    Claude was shown, without re-fetching it or trusting Claude's own arithmetic.
     """
     messages = [{"role": "user", "content": json.dumps(payload, default=str)}]
     extra_kwargs = {"tool_choice": {"type": "any"}} if finish_tool else {}
+    tool_cache: dict = {"technical_indicators": {}, "option_chains": {}}
     for _ in range(max_iterations):
         response = _get_client().messages.create(
             model=_MODEL,
@@ -732,6 +743,10 @@ def _agentic_call(
                 except Exception as exc:
                     logger.exception("Tool %s failed", block.name)
                     result = {"error": str(exc)}
+                if block.name == "get_technical_indicators" and isinstance(result, dict):
+                    tool_cache["technical_indicators"].update(result)
+                elif block.name == "get_option_chain" and isinstance(result, dict):
+                    tool_cache["option_chains"].update(result)
                 results.append(
                     {
                         "type": "tool_result",
@@ -740,7 +755,7 @@ def _agentic_call(
                     }
                 )
             if finish_input is not None:
-                return finish_input
+                return finish_input, tool_cache
             messages.append({"role": "user", "content": results})
             continue
         if response.stop_reason == "end_turn":
@@ -758,9 +773,86 @@ def _agentic_call(
                 continue
             for block in response.content:
                 if hasattr(block, "text"):
-                    return block.text
-            return ""
+                    return block.text, tool_cache
+            return "", tool_cache
     raise ValueError(f"Agentic loop exceeded {max_iterations} iterations without a final answer")
+
+
+def _compute_option_target_price(setup: dict, tool_cache: dict) -> float | None:
+    """Grounds an option's profit target in real market data instead of trusting
+    Claude's own arithmetic: today's opening-range size (orh - orl, an ORB-style
+    proxy for this ticker's realized volatility so far) scaled up when rvol shows
+    strong volume conviction, then translated into a premium move via the
+    contract's own delta. Returns None (caller falls back to Claude's proposed
+    target_price) if any needed real data isn't in tool_cache — e.g. the ticker's
+    technical_indicators weren't fetched this turn, or the chosen contract isn't
+    in the cached chain.
+    """
+    ticker = setup.get("ticker")
+    option_symbol = setup.get("option_symbol")
+    entry_price = setup.get("entry_price")
+    if not ticker or not option_symbol or entry_price is None:
+        return None
+
+    indicators = tool_cache.get("technical_indicators", {}).get(ticker)
+    if not indicators:
+        return None
+    orh = indicators.get("orh")
+    orl = indicators.get("orl")
+    if orh is None or orl is None:
+        return None
+    opening_range_size = orh - orl
+    if opening_range_size <= 0:
+        return None
+
+    # 1.0x the opening range by default; volume conviction (rvol close to its
+    # own peak) extends this toward 1.5x — same signals technical_indicators
+    # already exposes for setup qualification, reused here for magnitude.
+    range_multiple = 1.0
+    rvol = indicators.get("rvol")
+    peak_rvol = indicators.get("peak_rvol")
+    if rvol is not None and peak_rvol:
+        conviction = min(1.0, rvol / peak_rvol)
+        range_multiple += 0.5 * conviction
+
+    expected_underlying_move = opening_range_size * range_multiple
+
+    delta = None
+    for contract in tool_cache.get("option_chains", {}).get(ticker, []):
+        if contract.get("symbol") == option_symbol:
+            delta = contract.get("delta")
+            break
+    if not delta:
+        return None
+
+    # abs(delta): direction is encoded by which side (call/put) was selected for
+    # the setup, not by delta's sign — a winning long option always means
+    # premium rising, regardless of call or put (see OptionTradeSetup.direction).
+    expected_premium_move = expected_underlying_move * abs(delta)
+    if expected_premium_move <= 0:
+        return None
+
+    return round(entry_price + expected_premium_move, 2)
+
+
+def _apply_profit_targets(parsed: dict, tool_cache: dict) -> None:
+    """Overrides target_price on every option suggestion with the deterministic
+    formula above, before Pydantic validation recomputes expected_gain/max_loss/
+    reward_risk_ratio from it. Mutates parsed["suggestions"]/parsed["recommended"]
+    in place. No-ops for equity suggestions, and leaves target_price untouched
+    (Claude's proposed value) when the real data needed isn't available.
+    """
+    setups = list(parsed.get("suggestions") or [])
+    recommended = parsed.get("recommended")
+    if isinstance(recommended, dict):
+        setups.append(recommended)
+
+    for setup in setups:
+        if not isinstance(setup, dict) or setup.get("instrument_type") != "option":
+            continue
+        new_target = _compute_option_target_price(setup, tool_cache)
+        if new_target is not None:
+            setup["target_price"] = new_target
 
 
 def morning_briefing(ctx: DailyContext) -> str:
@@ -853,7 +945,7 @@ def suggest_trades(
     # get_option_chain round trip (batched across every qualifying ticker, but
     # still a real turn) on top of the original movers/technical_indicators/
     # portfolio/sentiment sequence, and Claude sometimes retries a tool call.
-    parsed = _agentic_call(
+    parsed, tool_cache = _agentic_call(
         system,
         payload,
         tools=tools,
@@ -872,6 +964,11 @@ def suggest_trades(
     parsed.setdefault("recommended", None)
     parsed.setdefault("guardrails_checked", [])
     parsed.setdefault("any_guardrail_triggered", False)
+
+    # Override option target_price with the deterministic, data-grounded value
+    # before validation — _recompute_gain_risk then derives expected_gain/
+    # max_loss/reward_risk_ratio from this number, not Claude's own estimate.
+    _apply_profit_targets(parsed, tool_cache)
 
     suggestion = TradeSuggestionResponse.model_validate(parsed)
 

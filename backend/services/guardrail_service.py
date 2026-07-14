@@ -43,8 +43,8 @@ class GuardrailResult:
 
 
 def _check_daily_loss_limit(trade, ctx: GuardrailContext) -> tuple[bool, str]:
-    # $1,500 default (up from equity-only $200) — sized for $1k-$6k option
-    # positions under the options pivot (intraday-options-pivot-plan.md §1).
+    # $1,500 default (up from equity-only $200) — sized for option positions
+    # under the options pivot (intraday-options-pivot-plan.md §1).
     # Shared counter across equity and option trades, not per-instrument.
     limit = float(os.environ.get("DAILY_LOSS_LIMIT", 1500))
     if ctx.realized_pnl_today <= -limit:
@@ -94,10 +94,10 @@ def _check_daily_trade_limit(trade, ctx: GuardrailContext) -> tuple[bool, str]:
         return False, ""
     # 2 default (down from 3) — options pivot decision (§1, §8 Q7). One
     # shared counter across equity and option trades, not per-instrument —
-    # at the top of the $1k-$6k option sizing band, a single full-sized loss
-    # can still consume most of the daily_loss_limit budget, so "2" functions
-    # as a ceiling more than a guarantee of two independent full-sized
-    # attempts for larger trades (smaller ones have much more headroom).
+    # a single full-sized option loss (15% of cash) can still consume most of
+    # the daily_loss_limit budget, so "2" functions as a ceiling more than a
+    # guarantee of two independent full-sized attempts (smaller trades have
+    # much more headroom).
     limit = int(os.environ.get("DAILY_TRADE_LIMIT", 2))
     if ctx.trade_count_today >= limit:
         return True, f"Daily trade limit reached ({ctx.trade_count_today}/{limit})"

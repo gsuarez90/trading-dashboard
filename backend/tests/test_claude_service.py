@@ -204,3 +204,109 @@ def test_suggestion_response_round_trip_discriminates_option_from_tool_output():
     )
     assert isinstance(response.suggestions[0], OptionTradeSetup)
     assert isinstance(response.recommended, OptionTradeSetup)
+
+
+# ── Deterministic profit target (2026-07-14: 15%-of-cash entry sizing +
+# opening-range/delta-based target, replacing the $1,000-$6,000 band and the
+# "pick a target that keeps reward_risk_ratio >= 1.5" self-reported target) ──
+
+
+def test_build_suggestion_system_mentions_15_percent_sizing():
+    system = claude_service._build_suggestion_system("cash_intraday", "holdings_only", 100)
+    assert "15% of available cash" in system
+    assert "$1,000-$6,000" not in system
+
+
+def test_compute_option_target_price_uses_opening_range_and_delta():
+    setup = {
+        "ticker": "AAPL",
+        "option_symbol": "AAPL  260720C00310000",
+        "entry_price": 8.68,
+        "target_price": 999.0,  # Claude's placeholder — should be overridden
+    }
+    tool_cache = {
+        "technical_indicators": {"AAPL": {"orh": 320.0, "orl": 316.0}},
+        "option_chains": {"AAPL": [{"symbol": "AAPL  260720C00310000", "delta": 0.5}]},
+    }
+    # opening_range_size = 4.0, no rvol data so range_multiple stays 1.0
+    # expected_premium_move = 4.0 * 1.0 * 0.5 = 2.0 -> target = 8.68 + 2.0
+    assert claude_service._compute_option_target_price(setup, tool_cache) == 10.68
+
+
+def test_compute_option_target_price_scales_up_with_volume_conviction():
+    setup = {
+        "ticker": "AAPL",
+        "option_symbol": "AAPL  260720C00310000",
+        "entry_price": 8.68,
+        "target_price": 999.0,
+    }
+    tool_cache = {
+        "technical_indicators": {
+            "AAPL": {"orh": 320.0, "orl": 316.0, "rvol": 2.0, "peak_rvol": 2.0}
+        },
+        "option_chains": {"AAPL": [{"symbol": "AAPL  260720C00310000", "delta": 0.5}]},
+    }
+    # rvol at its own peak -> conviction=1.0 -> range_multiple = 1.5
+    # expected_premium_move = 4.0 * 1.5 * 0.5 = 3.0 -> target = 8.68 + 3.0
+    assert claude_service._compute_option_target_price(setup, tool_cache) == 11.68
+
+
+def test_compute_option_target_price_none_without_technical_indicators():
+    setup = {"ticker": "AAPL", "option_symbol": "AAPL  260720C00310000", "entry_price": 8.68}
+    tool_cache = {"technical_indicators": {}, "option_chains": {}}
+    assert claude_service._compute_option_target_price(setup, tool_cache) is None
+
+
+def test_compute_option_target_price_none_without_matching_contract_delta():
+    setup = {"ticker": "AAPL", "option_symbol": "AAPL  260720C00310000", "entry_price": 8.68}
+    tool_cache = {
+        "technical_indicators": {"AAPL": {"orh": 320.0, "orl": 316.0}},
+        "option_chains": {"AAPL": [{"symbol": "AAPL  260720C00999000", "delta": 0.3}]},
+    }
+    assert claude_service._compute_option_target_price(setup, tool_cache) is None
+
+
+def test_apply_profit_targets_overrides_option_but_not_equity():
+    option_setup = {
+        "instrument_type": "option",
+        "ticker": "AAPL",
+        "option_symbol": "AAPL  260720C00310000",
+        "entry_price": 8.68,
+        "target_price": 999.0,
+    }
+    equity_setup = {
+        "instrument_type": "equity",
+        "ticker": "NVDA",
+        "entry_price": 100.0,
+        "target_price": 104.0,
+    }
+    parsed = {
+        "suggestions": [option_setup, equity_setup],
+        "recommended": dict(option_setup),
+    }
+    tool_cache = {
+        "technical_indicators": {"AAPL": {"orh": 320.0, "orl": 316.0}},
+        "option_chains": {"AAPL": [{"symbol": "AAPL  260720C00310000", "delta": 0.5}]},
+    }
+
+    claude_service._apply_profit_targets(parsed, tool_cache)
+
+    assert parsed["suggestions"][0]["target_price"] == 10.68
+    assert parsed["suggestions"][1]["target_price"] == 104.0  # equity untouched
+    assert parsed["recommended"]["target_price"] == 10.68
+
+
+def test_apply_profit_targets_falls_back_to_claudes_target_when_data_missing():
+    option_setup = {
+        "instrument_type": "option",
+        "ticker": "AAPL",
+        "option_symbol": "AAPL  260720C00310000",
+        "entry_price": 8.68,
+        "target_price": 13.02,
+    }
+    parsed = {"suggestions": [option_setup], "recommended": None}
+    tool_cache = {"technical_indicators": {}, "option_chains": {}}
+
+    claude_service._apply_profit_targets(parsed, tool_cache)
+
+    assert parsed["suggestions"][0]["target_price"] == 13.02  # unchanged
