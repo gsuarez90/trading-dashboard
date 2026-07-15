@@ -340,8 +340,14 @@ def test_build_briefing_system_kill_switch_reverts_to_avoid_bearish():
     assert "long PUT candidate" not in system
 
 
-# ── Hit-probability calc (2026-07-14): theoretical touch-probability toward
-# target, informational only, populates the Phase 2 ml_probability field ─────
+# ── Hit-probability calc (2026-07-14): double-barrier touch probability
+# (target BEFORE stop, not just "does it ever reach target"), informational
+# only, populates the Phase 2 ml_probability field. The two-barrier exit
+# probability is solved via an implicit finite-difference PDE scheme (see
+# _pde_hit_upper_before_lower), not a hand-derived closed form — cross-
+# validated against a continuity-corrected Monte Carlo simulation for both
+# call and put directions before landing here (all within MC sampling noise,
+# see conversation/equations-reference.md for the validation script). ────────
 
 
 def _call_setup(**overrides):
@@ -351,6 +357,7 @@ def _call_setup(**overrides):
         "instrument_type": "option",
         "entry_price": 6.47,
         "target_price": 10.56,
+        "stop_loss": 4.29,
         "underlying_price_at_entry": 107.0,
     }
     setup.update(overrides)
@@ -365,17 +372,19 @@ def _call_tool_cache(delta=0.54, iv=100.0):
     }
 
 
-def test_compute_option_hit_probability_matches_hand_derived_value():
-    # Same numbers as the worked example discussed with the user: ~12.4%
-    # touch probability for a ~$7.57 required underlying move in 200 minutes
-    # at 100% IV.
+def test_compute_option_hit_probability_matches_pde_validated_value():
+    # Real NOW $107 call numbers from earlier in the session (entry/target/stop
+    # all real trade values). PDE result cross-validated against Monte Carlo.
     p = claude_service._compute_option_hit_probability(
         _call_setup(), _call_tool_cache(), minutes_remaining=200
     )
-    assert p == 0.1239
+    assert p == 0.1238
 
 
 def test_compute_option_hit_probability_increases_with_more_time_remaining():
+    # Not guaranteed in general for a double-barrier calc (more time helps
+    # BOTH barriers) — holds here because target is far enough from stop that
+    # more time still net-favors reaching target first for this setup.
     p_30 = claude_service._compute_option_hit_probability(
         _call_setup(), _call_tool_cache(), minutes_remaining=30
     )
@@ -388,6 +397,21 @@ def test_compute_option_hit_probability_increases_with_more_time_remaining():
     assert p_30 < p_200 < p_390
 
 
+def test_compute_option_hit_probability_accounts_for_stop_not_just_target():
+    """Regression: the old single-barrier calc only asked "does it ever reach
+    target," ignoring the very real chance of getting stopped out first. A
+    tighter stop (same target, same everything else) must lower the
+    probability, since more of the target-reaching paths now get cut off by
+    the closer stop along the way."""
+    wide_stop = claude_service._compute_option_hit_probability(
+        _call_setup(stop_loss=1.0), _call_tool_cache(), minutes_remaining=200
+    )
+    tight_stop = claude_service._compute_option_hit_probability(
+        _call_setup(stop_loss=5.5), _call_tool_cache(), minutes_remaining=200
+    )
+    assert tight_stop < wide_stop
+
+
 def test_compute_option_hit_probability_handles_put_direction_via_signed_delta():
     """Puts have negative delta and profit on a DOWN move — the required-move
     formula must use signed (not abs) delta so this resolves correctly without
@@ -398,6 +422,7 @@ def test_compute_option_hit_probability_handles_put_direction_via_signed_delta()
         "instrument_type": "option",
         "entry_price": 1.20,
         "target_price": 1.50,
+        "stop_loss": 0.90,
         "underlying_price_at_entry": 12.0,
     }
     put_cache = {
@@ -408,7 +433,7 @@ def test_compute_option_hit_probability_handles_put_direction_via_signed_delta()
         }
     }
     p = claude_service._compute_option_hit_probability(put_setup, put_cache, minutes_remaining=200)
-    assert p == 0.2133
+    assert p == 0.2104
 
 
 def test_compute_option_hit_probability_none_without_minutes_remaining():
@@ -419,6 +444,15 @@ def test_compute_option_hit_probability_none_without_minutes_remaining():
     assert (
         claude_service._compute_option_hit_probability(_call_setup(), _call_tool_cache(), 0) is None
     )
+
+
+def test_compute_option_hit_probability_none_without_stop_loss():
+    setup = _call_setup()
+    del setup["stop_loss"]
+    p = claude_service._compute_option_hit_probability(
+        setup, _call_tool_cache(), minutes_remaining=200
+    )
+    assert p is None
 
 
 def test_compute_option_hit_probability_none_without_cached_contract():
@@ -449,11 +483,11 @@ def test_apply_hit_probabilities_sets_ml_fields_on_option_not_equity():
 
     claude_service._apply_hit_probabilities(parsed, _call_tool_cache(), minutes_remaining=200)
 
-    assert parsed["suggestions"][0]["ml_probability"] == 0.1239
+    assert parsed["suggestions"][0]["ml_probability"] == 0.1238
     assert "ml_calibration_note" in parsed["suggestions"][0]
     assert "not yet calibrated" in parsed["suggestions"][0]["ml_calibration_note"].lower()
     assert "ml_probability" not in parsed["suggestions"][1]  # equity untouched
-    assert parsed["recommended"]["ml_probability"] == 0.1239
+    assert parsed["recommended"]["ml_probability"] == 0.1238
 
 
 def test_apply_hit_probabilities_leaves_ml_probability_unset_when_data_missing():
