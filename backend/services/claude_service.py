@@ -45,34 +45,16 @@ Current settings:
 - Trade scope: {trade_scope}
 - Daily goal: ${goal_dollars}
 
-Produce a concise morning briefing:
+Produce a concise morning briefing with exactly three short paragraphs:
 1. Overall market conditions and intraday volatility today
 2. Whether today supports the ${goal_dollars} goal safely
-3. Top setups — constrained to trade_scope
-4. Key risks
-5. Holdings overlapping with today's setups
-6. Honest assessment — if today looks poor for trading, say so
+3. Honest assessment — if today looks poor for trading, say so
 
-If profit_mode is cash_intraday, assess opening range setups via the 5-min technical_indicators.
-A ticker qualifies bullish via bounce_setup (fresh breakout: 5-min open/close above ORH, plus
-price above VWAP/SMA(10)/SMA(20)) or pullback_setup (already broke out, cooled off, still holding
-above VWAP/SMA(10)/SMA(20)) — note these among today's top setups.
-{bearish_handling}
+Do not cover specific tickers, setups, or holdings here — that level of detail depends on
+opening-range/RVOL indicators that are still too fresh in the first few minutes of the session to
+usefully qualify anything yet, and belongs in chat/suggestions once the day has developed.
 Never suggest selling below cost basis unless allow_loss is true.
 Plain text only, no markdown.\
-"""
-
-_BRIEFING_BEARISH_WITH_OPTIONS = """\
-A ticker qualifies bearish via breakdown_setup (fresh breakdown) or pulldown_setup (already broke
-down, bounced partway, still holding below VWAP/SMA(10)/SMA(20)) — the mirror image below the ORL.
-Bearish structure is not something to avoid: since the options pivot it's a long PUT candidate,
-exactly as bullish structure is a long CALL candidate. Note qualifying setups from both directions
-among today's top setups, not just bullish ones.\
-"""
-
-_BRIEFING_BEARISH_EQUITY_ONLY = """\
-Flag any ticker where price_below_orl=true as a structure to avoid — the equity-only system never
-shorts, so bearish structure has no actionable trade here.\
 """
 
 _CHAT_SYSTEM = """\
@@ -1111,22 +1093,48 @@ def _apply_hit_probabilities(
             )
 
 
-def _build_briefing_system(
-    profit_mode: str,
-    trade_scope: str,
-    goal_dollars: int,
-    include_options: bool | None = None,
-) -> str:
-    if include_options is None:
-        include_options = _include_options_suggestions()
+def _build_briefing_system(profit_mode: str, trade_scope: str, goal_dollars: int) -> str:
     return _BRIEFING_SYSTEM.format(
         profit_mode=profit_mode,
         trade_scope=trade_scope,
         goal_dollars=goal_dollars,
-        bearish_handling=(
-            _BRIEFING_BEARISH_WITH_OPTIONS if include_options else _BRIEFING_BEARISH_EQUITY_ONLY
-        ),
     )
+
+
+def _briefing_payload(ctx: DailyContext) -> dict:
+    """Trims the full daily context down to what the 3-paragraph briefing prompt
+    actually uses. chat() and suggest_trades() still get the complete
+    ctx.to_dict() — this is briefing-only and doesn't touch context_loader.py,
+    so neither of those is affected.
+
+    Drops (all only ever fed the old, now-removed "top setups"/"holdings
+    overlap"/"key risks" sections):
+    - technical_indicators: per-ticker opening-range/RVOL/setup-boolean data,
+      by far the largest piece of the payload — the briefing no longer
+      discusses individual tickers or setups at all.
+    - portfolio.positions: per-holding cost basis/current price/unrealized P&L;
+      aggregate cash/equity is kept for the goal-safety paragraph.
+    - trades_today: itemized trade objects; realized_pnl_today/trade_count_today
+      (already separate scalar fields) cover what goal-safety needs.
+    - guardrail_events: itemized blocked-trade list; guardrail_status (the
+      aggregate go/no-go state) is kept.
+    """
+    return {
+        "date": ctx.date,
+        "cash": ctx.cash,
+        "portfolio": {"cash": ctx.portfolio.get("cash"), "equity": ctx.portfolio.get("equity")},
+        "scanner_results": ctx.scanner_results,
+        "top_movers": ctx.top_movers,
+        "sentiment": ctx.sentiment,
+        "realized_pnl_today": ctx.realized_pnl_today,
+        "trade_count_today": ctx.trade_count_today,
+        "guardrail_status": ctx.guardrail_status,
+        "minutes_remaining": ctx.minutes_remaining,
+        "trading_mode": ctx.trading_mode,
+        "profit_mode": ctx.profit_mode,
+        "trade_scope": ctx.trade_scope,
+        "daily_goal": ctx.daily_goal,
+    }
 
 
 def morning_briefing(ctx: DailyContext) -> str:
@@ -1140,7 +1148,7 @@ def morning_briefing(ctx: DailyContext) -> str:
         model=_MODEL,
         max_tokens=2048,
         system=system,
-        messages=[{"role": "user", "content": json.dumps(ctx.to_dict(), default=str)}],
+        messages=[{"role": "user", "content": json.dumps(_briefing_payload(ctx), default=str)}],
     )
     return response.content[0].text
 

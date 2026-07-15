@@ -14,6 +14,7 @@ the deterministic, non-LLM Python logic around it.
 import pytest
 
 from services import claude_service
+from services.context_loader import DailyContext
 
 
 @pytest.fixture(autouse=True)
@@ -342,32 +343,86 @@ def test_apply_profit_targets_falls_back_to_claudes_target_when_data_missing():
     assert parsed["suggestions"][0]["target_price"] == 13.02  # unchanged
 
 
-# ── Morning briefing: must reflect the options-primary strategy, not the
-# pre-pivot equity-only "bearish = avoid" framing (2026-07-14) ────────────────
+# ── Morning briefing: shrunk to 3 short paragraphs (2026-07-15) — the old
+# "top setups"/"holdings overlap" sections leaned on opening-range/RVOL
+# indicators that are still too fresh in the first few minutes to usefully
+# qualify anything, and inflated both prompt and completion tokens ──────────
 
 
-def test_build_briefing_system_default_treats_bearish_as_put_candidate():
+def test_build_briefing_system_limits_to_three_paragraphs():
     system = claude_service._build_briefing_system("cash_intraday", "holdings_only", 100)
-    assert "long PUT candidate" in system
-    assert "breakdown_setup" in system
-    assert "pulldown_setup" in system
-    assert "not something to avoid" in system
-    # legacy avoid-bearish framing must not leak into the options-primary text
-    assert "structure to avoid" not in system
+    assert "1. Overall market conditions and intraday volatility today" in system
+    assert "2. Whether today supports the $100 goal safely" in system
+    assert "3. Honest assessment" in system
+    assert "4." not in system
 
 
-def test_build_briefing_system_mentions_bullish_setups():
+def test_build_briefing_system_drops_setup_qualification_language():
     system = claude_service._build_briefing_system("cash_intraday", "holdings_only", 100)
-    assert "bounce_setup" in system
-    assert "pullback_setup" in system
+    for term in (
+        "bounce_setup",
+        "pullback_setup",
+        "breakdown_setup",
+        "pulldown_setup",
+        "long PUT candidate",
+        "structure to avoid",
+    ):
+        assert term not in system
 
 
-def test_build_briefing_system_kill_switch_reverts_to_avoid_bearish():
-    system = claude_service._build_briefing_system(
-        "cash_intraday", "holdings_only", 100, include_options=False
+def _fake_daily_context(**overrides) -> DailyContext:
+    ctx = DailyContext(
+        date="2026-07-15",
+        cash=5000.0,
+        portfolio={
+            "cash": 5000.0,
+            "equity": 12000.0,
+            "positions": [{"ticker": "AAPL", "shares": 10}],
+        },
+        scanner_results=[{"ticker": "NVDA", "change_pct": 3.2}],
+        top_movers=[{"ticker": "NVDA", "change_pct": 3.2}],
+        sentiment=[{"ticker": "NVDA", "score": 0.5}],
+        technical_indicators={"NVDA": {"orh": 120.0, "orl": 118.0, "bounce_setup": True}},
+        trades_today=[{"ticker": "NVDA", "status": "closed", "realized_pnl": 42.0}],
+        realized_pnl_today=42.0,
+        trade_count_today=1,
+        guardrail_status={"daily_loss_limit": False},
+        guardrail_events=[{"ticker": "NVDA", "rule": "reward_risk_minimum"}],
+        minutes_remaining=200,
+        trading_mode="paper",
+        profit_mode="cash_intraday",
+        trade_scope="open",
+        daily_goal=100.0,
     )
-    assert "structure to avoid" in system
-    assert "long PUT candidate" not in system
+    for k, v in overrides.items():
+        setattr(ctx, k, v)
+    return ctx
+
+
+def test_briefing_payload_drops_technical_indicators_and_itemized_lists():
+    """These fields only ever fed the now-removed "top setups"/"holdings
+    overlap"/"key risks" sections — technical_indicators in particular is by
+    far the largest piece of the full context (per-ticker opening-range/RVOL/
+    setup booleans), and the trimmed 3-paragraph briefing never discusses
+    individual tickers or setups."""
+    payload = claude_service._briefing_payload(_fake_daily_context())
+    assert "technical_indicators" not in payload
+    assert "positions" not in payload["portfolio"]
+    assert "trades_today" not in payload
+    assert "guardrail_events" not in payload
+
+
+def test_briefing_payload_keeps_fields_the_three_paragraphs_need():
+    payload = claude_service._briefing_payload(_fake_daily_context())
+    assert payload["scanner_results"] == [{"ticker": "NVDA", "change_pct": 3.2}]
+    assert payload["top_movers"] == [{"ticker": "NVDA", "change_pct": 3.2}]
+    assert payload["sentiment"] == [{"ticker": "NVDA", "score": 0.5}]
+    assert payload["portfolio"] == {"cash": 5000.0, "equity": 12000.0}
+    assert payload["realized_pnl_today"] == 42.0
+    assert payload["trade_count_today"] == 1
+    assert payload["guardrail_status"] == {"daily_loss_limit": False}
+    assert payload["minutes_remaining"] == 200
+    assert payload["daily_goal"] == 100.0
 
 
 # ── Hit-probability calc (2026-07-14): double-barrier touch probability
