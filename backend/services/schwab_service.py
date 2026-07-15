@@ -803,13 +803,14 @@ def get_option_chain(
     than cached at import, so the same config the guardrail_service.py
     expiration_proximity check enforces also governs what gets fetched
     here — one source of truth instead of two hardcoded numbers that could
-    drift apart. Falls back to 7/21 — the options pivot's decided
-    expiration floor/ceiling (intraday-options-pivot-plan.md §1, §6).
+    drift apart. Falls back to 0/7 — narrowed from the options pivot's
+    original 7/21 floor/ceiling on 2026-07-15 now that the target-price and
+    hit-probability calcs account for gamma (see equations-reference.md §4/§4b).
     """
     if min_dte is None:
-        min_dte = int(os.environ.get("OPTION_MIN_DTE", 7))
+        min_dte = int(os.environ.get("OPTION_MIN_DTE", 0))
     if max_dte is None:
-        max_dte = int(os.environ.get("OPTION_MAX_DTE", 21))
+        max_dte = int(os.environ.get("OPTION_MAX_DTE", 7))
 
     today = datetime.now(tz=ET)
     from_date = today + timedelta(days=min_dte)

@@ -153,15 +153,18 @@ def _check_option_liquidity(trade, ctx: GuardrailContext) -> tuple[bool, str]:
 
 
 def _check_expiration_proximity(trade, ctx: GuardrailContext) -> tuple[bool, str]:
-    """No-ops for equity trades. Enforces both the options pivot's 7-day
-    min-DTE floor (gentle enough theta/gamma for a setup that takes 20-40
-    minutes to confirm, even though the position exits same-day regardless)
-    and its ~3-week max-DTE ceiling (keeps cash_intraday distinct from a
-    future swing-mode option) — intraday-options-pivot-plan.md §1, §6."""
+    """No-ops for equity trades. Enforces both a min-DTE floor and a max-DTE
+    ceiling around today's session. Narrowed to 0-7 on 2026-07-15 (from the
+    options pivot's original 7/21 — intraday-options-pivot-plan.md §1, §6)
+    now that _compute_option_target_price/_compute_option_hit_probability
+    account for gamma, the correction that mattered most for the short-dated
+    contracts this window surfaces more of. Theta is still unmodeled, so
+    treat contracts at the 0-DTE end of this window as the least reliable
+    the calcs can currently speak to."""
     if trade.instrument_type != "option":
         return False, ""
-    min_dte = int(os.environ.get("OPTION_MIN_DTE", 7))
-    max_dte = int(os.environ.get("OPTION_MAX_DTE", 21))
+    min_dte = int(os.environ.get("OPTION_MIN_DTE", 0))
+    max_dte = int(os.environ.get("OPTION_MAX_DTE", 7))
     if trade.days_to_expiration < min_dte:
         return True, (
             f"{trade.days_to_expiration} days to expiration is below the " f"{min_dte}-day minimum"

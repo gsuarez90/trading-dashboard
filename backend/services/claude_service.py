@@ -805,15 +805,41 @@ def _lookup_cached_contract(ticker: str, option_symbol: str, tool_cache: dict) -
     return None
 
 
+def _required_underlying_move(premium_change: float, delta: float, gamma: float | None) -> float:
+    """Inverts the delta/gamma Taylor expansion of an option's premium change
+    (dPremium ~= delta*dS + 0.5*gamma*dS^2) to find the underlying move dS that
+    produces a given premium_change. This is the quadratic counterpart to the
+    plain dS = premium_change/delta division used before gamma was modeled.
+
+    Of the quadratic's two roots, the one that reduces to premium_change/delta
+    as gamma -> 0 is sign(delta)*sqrt(...) in the numerator (verified by
+    expanding the sqrt for small gamma) — the other root diverges to
+    +/-infinity in that limit and is discarded. Falls back to the plain linear
+    division when gamma is unavailable/zero, or when the gamma term is large
+    enough to push the discriminant negative — that's the model's own signal
+    that a quadratic correction no longer makes sense here, not something
+    worth propagating as a wrong answer.
+    """
+    if not gamma:
+        return premium_change / delta
+    discriminant = delta * delta + 2 * gamma * premium_change
+    if discriminant < 0:
+        return premium_change / delta
+    sign = 1.0 if delta > 0 else -1.0
+    return (-delta + sign * math.sqrt(discriminant)) / gamma
+
+
 def _compute_option_target_price(setup: dict, tool_cache: dict) -> float | None:
     """Grounds an option's profit target in real market data instead of trusting
     Claude's own arithmetic: today's opening-range size (orh - orl, an ORB-style
     proxy for this ticker's realized volatility so far) scaled up when rvol shows
     strong volume conviction, then translated into a premium move via the
-    contract's own delta. Returns None (caller falls back to Claude's proposed
-    target_price) if any needed real data isn't in tool_cache — e.g. the ticker's
-    technical_indicators weren't fetched this turn, or the chosen contract isn't
-    in the cached chain.
+    contract's own delta and (when available) gamma — the second-order
+    correction that matters most for the short-dated contracts most affected by
+    a narrow DTE window, where delta itself shifts fast as the underlying moves.
+    Returns None (caller falls back to Claude's proposed target_price) if any
+    needed real data isn't in tool_cache — e.g. the ticker's technical_indicators
+    weren't fetched this turn, or the chosen contract isn't in the cached chain.
     """
     ticker = setup.get("ticker")
     option_symbol = setup.get("option_symbol")
@@ -848,11 +874,16 @@ def _compute_option_target_price(setup: dict, tool_cache: dict) -> float | None:
     delta = contract.get("delta") if contract else None
     if not delta:
         return None
+    gamma = contract.get("gamma") if contract else None
 
     # abs(delta): direction is encoded by which side (call/put) was selected for
     # the setup, not by delta's sign — a winning long option always means
     # premium rising, regardless of call or put (see OptionTradeSetup.direction).
+    # Gamma is always positive for a long option (call or put), so its
+    # correction term is always a tailwind here too — no abs() needed.
     expected_premium_move = expected_underlying_move * abs(delta)
+    if gamma:
+        expected_premium_move += 0.5 * gamma * expected_underlying_move**2
     if expected_premium_move <= 0:
         return None
 
@@ -960,10 +991,14 @@ def _compute_option_hit_probability(
     at its default (None) rather than fabricate a number.
 
     Simplifying assumptions worth remembering when reading this number: zero
-    drift, no gaps/jumps, delta held constant (ignores gamma), and intraday
-    volatility treated as flat across the session (real markets are choppier
-    at the open/close than midday). Treat this as a rough signal, not a
-    calibrated probability, until real outcomes validate it.
+    drift, no gaps/jumps, and intraday volatility treated as flat across the
+    session (real markets are choppier at the open/close than midday). Delta's
+    curvature (gamma) is now accounted for via _required_underlying_move, but
+    theta (time decay) is still not modeled at all — the premium is treated as
+    only a function of the underlying's price, never of time passing on its
+    own, which understates target difficulty and overstates stop risk for
+    short-dated contracts held near expiration. Treat this as a rough signal,
+    not a calibrated probability, until real outcomes validate it.
     """
     if not minutes_remaining or minutes_remaining <= 0:
         return None
@@ -989,12 +1024,15 @@ def _compute_option_hit_probability(
     if contract is None:
         return None
     delta = contract.get("delta")
+    gamma = contract.get("gamma")
     iv_pct = contract.get("implied_volatility")
     if not delta or iv_pct is None or iv_pct <= 0:
         return None
 
-    required_price_target = underlying_price + (target_price - entry_price) / delta
-    required_price_stop = underlying_price + (stop_loss - entry_price) / delta
+    move_to_target = _required_underlying_move(target_price - entry_price, delta, gamma)
+    move_to_stop = _required_underlying_move(stop_loss - entry_price, delta, gamma)
+    required_price_target = underlying_price + move_to_target
+    required_price_stop = underlying_price + move_to_stop
     if required_price_target <= 0 or required_price_stop <= 0:
         return None
 

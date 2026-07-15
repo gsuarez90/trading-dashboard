@@ -217,6 +217,17 @@ def test_build_suggestion_system_mentions_15_percent_sizing():
     assert "$1,000-$6,000" not in system
 
 
+def test_required_underlying_move_matches_linear_when_gamma_absent():
+    assert claude_service._required_underlying_move(3.0, 0.5, None) == 6.0
+    assert claude_service._required_underlying_move(3.0, 0.5, 0) == 6.0
+
+
+def test_required_underlying_move_falls_back_to_linear_on_negative_discriminant():
+    # gamma large enough relative to delta/premium_change that the quadratic
+    # has no real root — the model's own signal to fall back rather than guess
+    assert claude_service._required_underlying_move(-100.0, 0.1, 10.0) == -1000.0
+
+
 def test_compute_option_target_price_uses_opening_range_and_delta():
     setup = {
         "ticker": "AAPL",
@@ -249,6 +260,25 @@ def test_compute_option_target_price_scales_up_with_volume_conviction():
     # rvol at its own peak -> conviction=1.0 -> range_multiple = 1.5
     # expected_premium_move = 4.0 * 1.5 * 0.5 = 3.0 -> target = 8.68 + 3.0
     assert claude_service._compute_option_target_price(setup, tool_cache) == 11.68
+
+
+def test_compute_option_target_price_adds_gamma_correction_when_available():
+    setup = {
+        "ticker": "AAPL",
+        "option_symbol": "AAPL  260720C00310000",
+        "entry_price": 8.68,
+        "target_price": 999.0,
+    }
+    tool_cache = {
+        "technical_indicators": {"AAPL": {"orh": 320.0, "orl": 316.0}},
+        "option_chains": {
+            "AAPL": [{"symbol": "AAPL  260720C00310000", "delta": 0.5, "gamma": 0.05}]
+        },
+    }
+    # expected_underlying_move = 4.0 (range_multiple=1.0, no rvol data)
+    # linear premium move = 4.0 * 0.5 = 2.0
+    # gamma correction = 0.5 * 0.05 * 4.0^2 = 0.4 -> total premium move = 2.4
+    assert claude_service._compute_option_target_price(setup, tool_cache) == 11.08
 
 
 def test_compute_option_target_price_none_without_technical_indicators():
@@ -364,12 +394,11 @@ def _call_setup(**overrides):
     return setup
 
 
-def _call_tool_cache(delta=0.54, iv=100.0):
-    return {
-        "option_chains": {
-            "NOW": [{"symbol": "NOW   260724C00107000", "delta": delta, "implied_volatility": iv}]
-        }
-    }
+def _call_tool_cache(delta=0.54, iv=100.0, gamma=None):
+    contract = {"symbol": "NOW   260724C00107000", "delta": delta, "implied_volatility": iv}
+    if gamma is not None:
+        contract["gamma"] = gamma
+    return {"option_chains": {"NOW": [contract]}}
 
 
 def test_compute_option_hit_probability_matches_pde_validated_value():
@@ -410,6 +439,23 @@ def test_compute_option_hit_probability_accounts_for_stop_not_just_target():
         _call_setup(stop_loss=5.5), _call_tool_cache(), minutes_remaining=200
     )
     assert tight_stop < wide_stop
+
+
+def test_compute_option_hit_probability_accounts_for_gamma_when_available():
+    """Gamma is a convexity tailwind for a long option in both directions: it
+    shrinks the underlying move needed to reach target (cheaper to get there)
+    and grows the move needed to reach stop (cushions the loss), so a realistic
+    positive gamma should raise the hit-target-first probability relative to
+    the gamma-blind (linear delta-only) calc."""
+    p_no_gamma = claude_service._compute_option_hit_probability(
+        _call_setup(), _call_tool_cache(), minutes_remaining=200
+    )
+    p_with_gamma = claude_service._compute_option_hit_probability(
+        _call_setup(), _call_tool_cache(gamma=0.01), minutes_remaining=200
+    )
+    assert p_no_gamma == 0.1238
+    assert p_with_gamma == 0.1475
+    assert p_with_gamma > p_no_gamma
 
 
 def test_compute_option_hit_probability_handles_put_direction_via_signed_delta():
