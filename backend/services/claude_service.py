@@ -710,7 +710,21 @@ def _agentic_call(
     get_option_chain results as Claude fetches them. This lets the caller ground a
     deterministic calculation (e.g. a profit target) in the exact real market data
     Claude was shown, without re-fetching it or trusting Claude's own arithmetic.
+
+    system/tools are marked as Anthropic prompt-cache breakpoints — both are
+    identical on every iteration of the loop below (~3,200 + ~1,500-2,500
+    tokens respectively), so without caching each of the up to max_iterations
+    turns re-processes that same static content from scratch on top of the
+    growing tool-result history. Real suggest-trades runs were observed
+    taking 60-90s on a single turn and occasionally exceeding the Lambda
+    timeout entirely; caching this static portion doesn't change what Claude
+    sees or how it reasons, only skips re-processing content that hasn't
+    changed since turn 1.
     """
+    system_blocks = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+    cached_tools = (
+        [*tools[:-1], {**tools[-1], "cache_control": {"type": "ephemeral"}}] if tools else tools
+    )
     messages = [{"role": "user", "content": json.dumps(payload, default=str)}]
     extra_kwargs = {"tool_choice": {"type": "any"}} if finish_tool else {}
     tool_cache: dict = {"technical_indicators": {}, "option_chains": {}}
@@ -718,8 +732,8 @@ def _agentic_call(
         response = _get_client().messages.create(
             model=_MODEL,
             max_tokens=4096,
-            system=system,
-            tools=tools,
+            system=system_blocks,
+            tools=cached_tools,
             messages=messages,
             **extra_kwargs,
         )
@@ -1050,9 +1064,30 @@ def _compute_option_barrier_probabilities(
     own, which understates target difficulty and overstates stop risk for
     short-dated contracts held near expiration. Treat these as rough signals,
     not calibrated probabilities, until real outcomes validate them.
+
+    Memoized on tool_cache: suggest_trades() calls this indirectly twice per
+    option setup (once via _apply_hit_probabilities, once via
+    _apply_expected_value) with the same setup/tool_cache/minutes_remaining —
+    cache the result there so the PDE only runs once per setup per request.
+    Tests pass a fresh tool_cache per call, so this doesn't change behavior
+    for isolated calls, only skips real duplicate work within one request.
     """
+    cache_key = (
+        setup.get("ticker"),
+        setup.get("option_symbol"),
+        setup.get("entry_price"),
+        setup.get("target_price"),
+        setup.get("stop_loss"),
+        setup.get("underlying_price_at_entry"),
+        minutes_remaining,
+    )
+    cache = tool_cache.setdefault("_barrier_probabilities_cache", {})
+    if cache_key in cache:
+        return cache[cache_key]
+
     barriers = _option_barrier_setup(setup, tool_cache, minutes_remaining)
     if barriers is None:
+        cache[cache_key] = None
         return None
     b_target, b_stop, variance = barriers
 
@@ -1070,7 +1105,9 @@ def _compute_option_barrier_probabilities(
     else:
         p_target, p_stop = p_hit_lower_first, p_hit_upper_first
 
-    return round(min(1.0, p_target), 4), round(min(1.0, p_stop), 4)
+    result = (round(min(1.0, p_target), 4), round(min(1.0, p_stop), 4))
+    cache[cache_key] = result
+    return result
 
 
 def _compute_option_hit_probability(

@@ -29,13 +29,6 @@ from services import cache_service, dynamo_service
 
 app = FastAPI(title="AI Trading Dashboard", redirect_slashes=False)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://ait.gsuarez.dev", "https://degen.gsuarez.dev", "http://localhost:5173"],
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "x-api-key"],
-)
-
 @app.middleware("http")
 async def strip_trailing_slash(request: Request, call_next):
     if request.url.path != "/" and request.url.path.endswith("/"):
@@ -53,6 +46,18 @@ if _PRIVATE_API_KEY:
         if request.headers.get("x-api-key") != _PRIVATE_API_KEY:
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
         return await call_next(request)
+
+
+# Registered last so it wraps every other middleware (Starlette's stack runs
+# most-recently-added outermost) — a 401 from require_api_key above still
+# needs CORS headers added, or the browser reports it as a network failure
+# ("Failed to fetch") instead of a readable 401.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://ait.gsuarez.dev", "https://degen.gsuarez.dev", "http://localhost:5173"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "x-api-key"],
+)
 
 
 try:
