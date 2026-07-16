@@ -12,7 +12,6 @@ from services.context_loader import (
     DailyContext,
     _cached_scanner_results,
     _cached_sentiment,
-    _enrich_positions,
     _get_watchlist,
 )
 from services.guardrail_service import GuardrailContext, check_all
@@ -653,7 +652,9 @@ def _execute_tool(name: str, tool_input: dict) -> dict | list:
     logger.info("Tool call: %s inputs=%s", name, tool_input)
     if name == "get_portfolio":
         portfolio = portfolio_factory.get_provider().get_portfolio()
-        portfolio["positions"] = _enrich_positions(portfolio.get("positions", []))
+        portfolio["positions"] = schwab_service.enrich_positions_with_quotes(
+            portfolio.get("positions", [])
+        )
         return portfolio
     if name == "get_top_movers":
         cached = _cached_scanner_results(min_change_pct=0)

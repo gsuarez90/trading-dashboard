@@ -105,6 +105,45 @@ def get_batch_quotes(tickers: list[str]) -> list[dict]:
     return results
 
 
+def enrich_positions_with_quotes(positions: list[dict]) -> list[dict]:
+    """Add current_price/unrealized_pnl/unrealized_pnl_pct to each position via
+    a single batch quote call. Shared by context_loader.py (Claude's context)
+    and routers/portfolio.py (frontend display) — both need the exact same
+    numbers, so this is the one place that computes them.
+    """
+    if not positions:
+        return positions
+    tickers = [p["ticker"] for p in positions if p.get("ticker")]
+    try:
+        quotes = {q["ticker"]: q for q in get_batch_quotes(tickers)}
+    except Exception:
+        quotes = {}
+
+    enriched = []
+    for pos in positions:
+        ticker = pos.get("ticker")
+        quote = quotes.get(ticker, {})
+        current_price = quote.get("price") or pos.get("current_price")
+        avg_cost = pos.get("avg_cost") or 0
+        shares = pos.get("shares") or 0
+
+        unrealized_pnl = None
+        unrealized_pnl_pct = None
+        if current_price and avg_cost and shares:
+            unrealized_pnl = round((current_price - avg_cost) * shares, 2)
+            unrealized_pnl_pct = round((current_price - avg_cost) / avg_cost * 100, 2)
+
+        enriched.append(
+            {
+                **pos,
+                "current_price": current_price,
+                "unrealized_pnl": unrealized_pnl,
+                "unrealized_pnl_pct": unrealized_pnl_pct,
+            }
+        )
+    return enriched
+
+
 # ── Dynamic watchlist via Schwab movers ──────────────────────────────────────
 
 _WATCHLIST_INDEXES = [
