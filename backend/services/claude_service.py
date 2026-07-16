@@ -939,13 +939,16 @@ def _pde_hit_upper_before_lower(
     return u[i0 - 1] + frac * (u[i0] - u[i0 - 1])
 
 
-def _compute_option_hit_probability(
+def _option_barrier_setup(
     setup: dict, tool_cache: dict, minutes_remaining: float | None
-) -> float | None:
-    """Theoretical probability the option's premium touches target_price
-    BEFORE touching stop_loss, within today's remaining session — a
-    double-barrier touch probability, not just "does it ever reach target"
-    (which ignores the very real chance of getting stopped out first).
+) -> tuple[float, float, float] | None:
+    """Shared setup for both double-barrier PDE calcs below (target-first and
+    stop-first probability need the exact same b_target/b_stop/variance
+    inputs — only the barrier orientation passed to _pde_hit_upper_before_lower
+    differs between them, same as the call/put mirror trick already used for
+    a single direction). Returns (b_target, b_stop, variance) in log-return
+    space, or None if any required real data (contract greeks/IV, minutes
+    remaining) isn't available this turn.
 
     Time-scoped to minutes_remaining in TODAY's session, not days_to_expiration
     — cash_intraday trades always exit same-day regardless of the contract's
@@ -958,29 +961,7 @@ def _compute_option_hit_probability(
     Modeled as a driftless-price lognormal random walk on the underlying
     (mu = -sigma^2/2, so the price itself has no directional bias), translated
     to premium terms via the contract's own delta — same building blocks as
-    _compute_option_target_price, reused here for a different question. The
-    two-barrier exit probability itself is solved numerically (see
-    _pde_hit_upper_before_lower) rather than via a hand-derived closed form,
-    which for two barriers is a much harder problem (an infinite reflection
-    series) than the single-barrier case and easy to get subtly wrong from
-    memory — a numerical PDE solve is far more reliable to get right and was
-    cross-validated against Monte Carlo before landing here.
-
-    Purely informational (does not gate anything, does not affect target_price
-    or guardrails) — populates ml_probability for future calibration against
-    real outcomes, per that field's original Phase 2 intent. Returns None if
-    any required real data is unavailable, so callers just leave ml_probability
-    at its default (None) rather than fabricate a number.
-
-    Simplifying assumptions worth remembering when reading this number: zero
-    drift, no gaps/jumps, and intraday volatility treated as flat across the
-    session (real markets are choppier at the open/close than midday). Delta's
-    curvature (gamma) is now accounted for via _required_underlying_move, but
-    theta (time decay) is still not modeled at all — the premium is treated as
-    only a function of the underlying's price, never of time passing on its
-    own, which understates target difficulty and overstates stop risk for
-    short-dated contracts held near expiration. Treat this as a rough signal,
-    not a calibrated probability, until real outcomes validate it.
+    _compute_option_target_price, reused here for a different question.
     """
     if not minutes_remaining or minutes_remaining <= 0:
         return None
@@ -1033,16 +1014,77 @@ def _compute_option_hit_probability(
         return None
     variance = sigma_t * sigma_t
 
+    return b_target, b_stop, variance
+
+
+def _compute_option_barrier_probabilities(
+    setup: dict, tool_cache: dict, minutes_remaining: float | None
+) -> tuple[float, float] | None:
+    """Returns (p_target, p_stop) — P(target touched before stop) and
+    P(stop touched before target), respectively, within today's remaining
+    session. Both come from the same validated PDE solver
+    (_pde_hit_upper_before_lower, see equations-reference.md §4b) — the only
+    difference between them is which barrier plays "upper" in the call, the
+    same mirror trick already used to handle calls vs. puts for a single
+    direction. p_target + p_stop <= 1; the remainder is the (uncomputed here)
+    probability neither barrier is touched by end of day.
+
+    The two-barrier exit probability itself is solved numerically rather than
+    via a hand-derived closed form, which for two barriers is a much harder
+    problem (an infinite reflection series) than the single-barrier case and
+    easy to get subtly wrong from memory — a numerical PDE solve is far more
+    reliable to get right and was cross-validated against Monte Carlo before
+    landing here.
+
+    Purely informational (does not gate anything, does not affect target_price
+    or guardrails). Returns None if the shared setup can't run — see
+    _option_barrier_setup — so callers just leave their fields at the default
+    (None) rather than fabricate a number.
+
+    Simplifying assumptions worth remembering when reading these numbers: zero
+    drift, no gaps/jumps, and intraday volatility treated as flat across the
+    session (real markets are choppier at the open/close than midday). Delta's
+    curvature (gamma) is now accounted for via _required_underlying_move, but
+    theta (time decay) is still not modeled at all — the premium is treated as
+    only a function of the underlying's price, never of time passing on its
+    own, which understates target difficulty and overstates stop risk for
+    short-dated contracts held near expiration. Treat these as rough signals,
+    not calibrated probabilities, until real outcomes validate them.
+    """
+    barriers = _option_barrier_setup(setup, tool_cache, minutes_remaining)
+    if barriers is None:
+        return None
+    b_target, b_stop, variance = barriers
+
     upper = max(b_target, b_stop)
     lower = min(b_target, b_stop)
-    if b_target == upper:
-        prob = _pde_hit_upper_before_lower(upper, lower, variance, _BARRIER_DRIFT)
-    else:
-        # mirror: P(hit lower before upper) = P(hit -lower before -upper) for
-        # the sign-flipped process (drift negated, barriers negated)
-        prob = _pde_hit_upper_before_lower(-lower, -upper, variance, -_BARRIER_DRIFT)
+    p_hit_upper_first = _pde_hit_upper_before_lower(upper, lower, variance, _BARRIER_DRIFT)
+    # mirror: P(hit lower before upper) = P(hit -lower before -upper) for the
+    # sign-flipped process (drift negated, barriers negated) — same trick as
+    # the call/put handling, just used here to get the OTHER barrier's
+    # first-hit probability instead of re-deriving a whole new formula.
+    p_hit_lower_first = _pde_hit_upper_before_lower(-lower, -upper, variance, -_BARRIER_DRIFT)
 
-    return round(min(1.0, prob), 4)
+    if b_target == upper:
+        p_target, p_stop = p_hit_upper_first, p_hit_lower_first
+    else:
+        p_target, p_stop = p_hit_lower_first, p_hit_upper_first
+
+    return round(min(1.0, p_target), 4), round(min(1.0, p_stop), 4)
+
+
+def _compute_option_hit_probability(
+    setup: dict, tool_cache: dict, minutes_remaining: float | None
+) -> float | None:
+    """Theoretical probability the option's premium touches target_price
+    BEFORE touching stop_loss — the P(target) half of
+    _compute_option_barrier_probabilities, kept as its own function since
+    it's the one field currently surfaced to users (ml_probability). See
+    _compute_option_barrier_probabilities for the full methodology/assumptions
+    docstring.
+    """
+    probabilities = _compute_option_barrier_probabilities(setup, tool_cache, minutes_remaining)
+    return probabilities[0] if probabilities is not None else None
 
 
 def _apply_profit_targets(parsed: dict, tool_cache: dict) -> None:
@@ -1091,6 +1133,71 @@ def _apply_hit_probabilities(
                 f"{minutes_remaining} min remaining today). Not yet calibrated against "
                 f"real outcomes."
             )
+
+
+def _apply_expected_value(parsed: dict, tool_cache: dict, minutes_remaining: float | None) -> None:
+    """Populates stop_probability and expected_value on every option
+    suggestion — the partial EV from equations-reference.md §4b's "EV still
+    not built" note, now built for its first two terms:
+
+        EV ~= P(target) x expected_gain + P(stop) x (-max_loss)
+
+    The third term (expected P&L for paths that hit neither barrier by end of
+    day) is deliberately NOT modeled — that would need a structurally
+    different PDE (value boundary conditions instead of the 0/1 indicator
+    ones _pde_hit_upper_before_lower uses). This partial EV silently treats
+    that leftover probability mass as a $0 breakeven wash, which is why it's
+    "partial," not a complete EV — flagged in ev_calibration_note so it isn't
+    mistaken for one later.
+
+    gain/loss per contract are recomputed here from entry/target/stop rather
+    than trusted off setup["expected_gain"]/["max_loss"], because this runs
+    before Pydantic's _recompute_gain_risk validator (see suggest_trades) —
+    the raw dict's expected_gain/max_loss may still hold Claude's
+    self-reported (unvalidated) numbers at this point, same reasoning as
+    _apply_profit_targets overriding target_price before validation.
+
+    Mutates parsed["suggestions"]/parsed["recommended"] in place, same
+    pattern as _apply_hit_probabilities. No-ops (leaves fields unset) when
+    the underlying probability calc or required trade fields aren't
+    available.
+    """
+    setups = list(parsed.get("suggestions") or [])
+    recommended = parsed.get("recommended")
+    if isinstance(recommended, dict):
+        setups.append(recommended)
+
+    for setup in setups:
+        if not isinstance(setup, dict) or setup.get("instrument_type") != "option":
+            continue
+        probabilities = _compute_option_barrier_probabilities(setup, tool_cache, minutes_remaining)
+        if probabilities is None:
+            continue
+        p_target, p_stop = probabilities
+
+        entry_price = setup.get("entry_price")
+        target_price = setup.get("target_price")
+        stop_loss = setup.get("stop_loss")
+        shares = setup.get("shares")
+        multiplier = setup.get("multiplier") or 100
+        if entry_price is None or target_price is None or stop_loss is None or not shares:
+            continue
+
+        gain_per_contract = target_price - entry_price
+        loss_per_contract = entry_price - stop_loss
+        expected_value = round(
+            p_target * gain_per_contract * shares * multiplier
+            - p_stop * loss_per_contract * shares * multiplier,
+            2,
+        )
+
+        setup["stop_probability"] = p_stop
+        setup["expected_value"] = expected_value
+        setup["ev_calibration_note"] = (
+            "Partial EV = P(target)*expected_gain + P(stop)*(-max_loss); assumes $0 P&L "
+            "for the probability mass that hits neither barrier by end of day (not "
+            "modeled). Not yet calibrated against real outcomes."
+        )
 
 
 def _build_briefing_system(profit_mode: str, trade_scope: str, goal_dollars: int) -> str:
@@ -1254,6 +1361,11 @@ def suggest_trades(
     # Populate ml_probability (informational only, doesn't gate anything) using
     # the corrected target_price above — must run after _apply_profit_targets.
     _apply_hit_probabilities(parsed, tool_cache, seed.get("minutes_remaining"))
+    # Populate stop_probability/expected_value (partial EV, informational
+    # only) — reuses the same PDE setup as _apply_hit_probabilities but needs
+    # its own call since it also derives gain/loss-per-contract from the
+    # (already corrected) target_price/stop_loss.
+    _apply_expected_value(parsed, tool_cache, seed.get("minutes_remaining"))
 
     suggestion = TradeSuggestionResponse.model_validate(parsed)
 

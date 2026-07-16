@@ -125,6 +125,27 @@ function SuggestionCard({ trade, isRecommended, allowLoss }) {
             </Text>
           </Text>
         )}
+        {trade.stop_probability != null && (
+          <Text size="xs" c="dimmed">
+            Stop prob{' '}
+            <Text
+              span
+              fw={700}
+              ff="mono"
+              c={trade.stop_probability >= 0.5 ? 'red' : trade.stop_probability >= 0.3 ? 'yellow' : 'green'}
+            >
+              {(trade.stop_probability * 100).toFixed(0)}%
+            </Text>
+          </Text>
+        )}
+        {trade.expected_value != null && (
+          <Text size="xs" c="dimmed" title={trade.ev_calibration_note ?? undefined}>
+            EV{' '}
+            <Text span fw={700} ff="mono" c={trade.expected_value >= 0 ? 'green' : 'red'}>
+              {trade.expected_value >= 0 ? '+' : '-'}${Math.abs(trade.expected_value).toFixed(0)}
+            </Text>
+          </Text>
+        )}
         {trade.uses_existing_holding && trade.cost_basis != null && (
           <Text size="xs" c="dimmed">
             Cost basis <Text span fw={700} c="var(--text)" ff="mono">${trade.cost_basis.toFixed(2)}</Text>

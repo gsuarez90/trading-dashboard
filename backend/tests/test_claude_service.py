@@ -598,3 +598,131 @@ def test_apply_hit_probabilities_leaves_ml_probability_unset_when_data_missing()
     claude_service._apply_hit_probabilities(parsed, {"option_chains": {}}, minutes_remaining=200)
 
     assert "ml_probability" not in parsed["suggestions"][0]
+
+
+# ── Partial EV (2026-07-15): P(stop) is the mirror of P(target) — same
+# validated PDE solver, just called with the barrier roles swapped — and
+# P(neither) is free arithmetic (1 - p_target - p_stop) that this partial EV
+# doesn't even need, since it assumes $0 P&L for that bucket. See
+# equations-reference.md §4b "EV still not built" and the conversation that
+# derived this. ───────────────────────────────────────────────────────────
+
+
+def test_compute_option_barrier_probabilities_matches_pde_validated_values():
+    # Same NOW $107 call fixture as the p_target-only tests above — now also
+    # asserting the mirrored P(stop) value and that the two don't exceed 1
+    # (the remainder is the uncomputed P(neither) bucket).
+    probs = claude_service._compute_option_barrier_probabilities(
+        _call_setup(), _call_tool_cache(), minutes_remaining=200
+    )
+    assert probs == (0.1238, 0.4008)
+    assert probs[0] + probs[1] < 1.0
+
+
+def test_compute_option_barrier_probabilities_put_direction():
+    put_setup = {
+        "ticker": "SQQQ",
+        "option_symbol": "SQQQ  260724P00012000",
+        "instrument_type": "option",
+        "entry_price": 1.20,
+        "target_price": 1.50,
+        "stop_loss": 0.90,
+        "underlying_price_at_entry": 12.0,
+    }
+    put_cache = {
+        "option_chains": {
+            "SQQQ": [
+                {"symbol": "SQQQ  260724P00012000", "delta": -0.45, "implied_volatility": 100.0}
+            ]
+        }
+    }
+    probs = claude_service._compute_option_barrier_probabilities(
+        put_setup, put_cache, minutes_remaining=200
+    )
+    assert probs == (0.2104, 0.2239)
+
+
+def test_compute_option_barrier_probabilities_gamma_lowers_stop_probability():
+    """Same convexity tailwind noted for p_target should cushion the stop
+    side too: realistic positive gamma cushions the loss (grows the move
+    needed to reach stop), so it should lower P(stop first) relative to the
+    gamma-blind calc, mirroring the p_target increase."""
+    p_no_gamma = claude_service._compute_option_barrier_probabilities(
+        _call_setup(), _call_tool_cache(), minutes_remaining=200
+    )
+    p_with_gamma = claude_service._compute_option_barrier_probabilities(
+        _call_setup(), _call_tool_cache(gamma=0.01), minutes_remaining=200
+    )
+    assert p_with_gamma[1] < p_no_gamma[1]
+
+
+def test_compute_option_barrier_probabilities_none_when_setup_unavailable():
+    assert (
+        claude_service._compute_option_barrier_probabilities(
+            _call_setup(), {"option_chains": {}}, minutes_remaining=200
+        )
+        is None
+    )
+
+
+def test_compute_option_hit_probability_still_matches_after_refactor():
+    """Regression: _compute_option_hit_probability now delegates to
+    _compute_option_barrier_probabilities internally — must still return
+    just the p_target half, unchanged from before the refactor."""
+    p = claude_service._compute_option_hit_probability(
+        _call_setup(), _call_tool_cache(), minutes_remaining=200
+    )
+    assert p == 0.1238
+
+
+def test_apply_expected_value_sets_fields_on_option_not_equity():
+    option_setup = _call_setup(shares=3, multiplier=100)
+    equity_setup = {"instrument_type": "equity", "ticker": "AAPL"}
+    parsed = {"suggestions": [option_setup, equity_setup], "recommended": dict(option_setup)}
+
+    claude_service._apply_expected_value(parsed, _call_tool_cache(), minutes_remaining=200)
+
+    assert parsed["suggestions"][0]["stop_probability"] == 0.4008
+    assert parsed["suggestions"][0]["expected_value"] == -110.22
+    assert "not modeled" in parsed["suggestions"][0]["ev_calibration_note"].lower()
+    assert "stop_probability" not in parsed["suggestions"][1]  # equity untouched
+    assert parsed["recommended"]["expected_value"] == -110.22
+
+
+def test_apply_expected_value_unset_when_probability_data_missing():
+    option_setup = _call_setup(shares=3, multiplier=100)
+    parsed = {"suggestions": [option_setup], "recommended": None}
+
+    claude_service._apply_expected_value(parsed, {"option_chains": {}}, minutes_remaining=200)
+
+    assert "expected_value" not in parsed["suggestions"][0]
+    assert "stop_probability" not in parsed["suggestions"][0]
+
+
+def test_apply_expected_value_unset_without_shares():
+    option_setup = _call_setup()
+    option_setup.pop("shares", None)
+    parsed = {"suggestions": [option_setup], "recommended": None}
+
+    claude_service._apply_expected_value(parsed, _call_tool_cache(), minutes_remaining=200)
+
+    assert "expected_value" not in parsed["suggestions"][0]
+
+
+def test_apply_expected_value_matches_manual_arithmetic():
+    """EV = P(target)*expected_gain + P(stop)*(-max_loss), computed from
+    entry/target/stop directly (not trusted off setup's own expected_gain/
+    max_loss, which aren't validated yet at this point in the pipeline —
+    _apply_expected_value runs before Pydantic's _recompute_gain_risk)."""
+    option_setup = _call_setup(shares=3, multiplier=100)
+    parsed = {"suggestions": [option_setup], "recommended": None}
+
+    claude_service._apply_expected_value(parsed, _call_tool_cache(), minutes_remaining=200)
+
+    p_target, p_stop = 0.1238, 0.4008
+    gain_per_contract = 10.56 - 6.47
+    loss_per_contract = 6.47 - 4.29
+    expected = round(
+        p_target * gain_per_contract * 3 * 100 - p_stop * loss_per_contract * 3 * 100, 2
+    )
+    assert parsed["suggestions"][0]["expected_value"] == expected

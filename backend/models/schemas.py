@@ -116,6 +116,16 @@ class OptionTradeSetup(BaseModel):
     # available when the suggestion was generated.
     ml_probability: float | None = None
     ml_calibration_note: str | None = None  # describes how ml_probability was derived
+    # Partial EV — see claude_service._apply_expected_value / equations-
+    # reference.md §4b "EV still not built". stop_probability is the mirror of
+    # ml_probability (P(stop) instead of P(target)); expected_value is
+    # P(target)*expected_gain + P(stop)*(-max_loss), assuming $0 P&L for the
+    # probability mass that hits neither barrier by end of day (not modeled —
+    # see ev_calibration_note). None if the underlying probability calc
+    # couldn't run.
+    stop_probability: float | None = None
+    expected_value: float | None = None
+    ev_calibration_note: str | None = None  # describes how expected_value was derived
 
     @model_validator(mode="after")
     def _recompute_gain_risk(self) -> "OptionTradeSetup":
