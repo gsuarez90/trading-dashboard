@@ -97,7 +97,7 @@ myAITradingApp/
 │   │   ├── context_loader.py         # DailyContext (briefing/chat) + build_seed_context() (suggest_trades agentic path)
 │   │   ├── dynamo_service.py         # All DynamoDB reads/writes — trades, cache, guardrail events
 │   │   ├── finnhub_service.py        # Finnhub news fetch + VADER sentiment scoring
-│   │   ├── guardrail_service.py      # 8 guardrail checks + status dashboard + kill switch
+│   │   ├── guardrail_service.py      # 10 guardrail checks + status dashboard + kill switch
 │   │   ├── live_tracking_service.py  # Live trade management (Phase 3)
 │   │   ├── market_data_service.py    # Thin wrapper — delegates all calls to schwab_service
 │   │   ├── paper_trading_service.py  # open_trade, close_trade, get_daily_summary
@@ -108,14 +108,24 @@ myAITradingApp/
 │   │   └── synthetic_portfolio.py    # Fake portfolio data for public demo (no credentials needed)
 │   │
 │   ├── models/
-│   │   └── schemas.py                # Pydantic data models — TradeSetup, PaperTrade, TradeSuggestionResponse
+│   │   └── schemas.py                # Pydantic data models — TradeSetup, OptionTradeSetup, PaperTrade, TradeSuggestionResponse
 │   │
-│   ├── tests/                        # Automated tests — run in CI on every pull request
+│   ├── tests/                        # Automated tests — run in CI on every pull request (15 files)
 │   │   ├── test_guardrails.py        # 14 guardrail tests — the hard gate before live trading
+│   │   ├── test_option_guardrails.py # The 2 option-only guardrails (liquidity, expiration proximity)
+│   │   ├── test_bearish_setups.py    # breakdown_setup/pulldown_setup (put-side) indicator tests
 │   │   ├── test_paper_trading.py     # Paper trade open/close/summary tests
+│   │   ├── test_paper_trading_options.py # Option-specific paper trade lifecycle tests
+│   │   ├── test_price_monitor_options.py # Option target/stop auto-close tests
 │   │   ├── test_live_tracking.py     # Live tracking tests
+│   │   ├── test_claude_service.py    # Agentic loop, profit targets, hit-probability/EV calc tests
+│   │   ├── test_context_loader.py    # DailyContext/seed-context assembly tests
+│   │   ├── test_schemas.py           # Pydantic schema validation tests
 │   │   ├── test_dynamo_service.py    # DynamoDB service tests (mocked with moto)
-│   │   └── test_schwab_service.py    # Schwab service integration tests
+│   │   ├── test_schwab_service.py    # Schwab service integration tests
+│   │   ├── test_schwab_options.py    # Option chain fetch/normalization tests
+│   │   ├── test_schwab_holiday.py    # Holiday-adjacent session detection tests
+│   │   └── test_technical_indicators.py # ORH/ORL/SMA/VWAP/RVOL indicator math tests
 │   │
 │   └── requirements.txt              # Python package dependencies
 │
@@ -128,9 +138,9 @@ myAITradingApp/
 │           ├── PortfolioView.jsx       # Live positions with unrealized P&L — auto-refreshes every 90s
 │           ├── SentimentFeed.jsx       # Bullish/bearish/neutral sentiment scores per ticker
 │           ├── ChatPanel.jsx           # Conversational AI + trade suggestion cards + Paper Trade button
-│           ├── PaperTradingPanel.jsx   # 3-tab panel: Open / History / Summary for paper trades
-│           ├── LiveTrackingPanel.jsx   # Same 3-tab structure for live trades + mode notice banner
-│           └── GuardrailsPanel.jsx     # Status cards for all 8 guardrails + events log + kill switch
+│           ├── PaperTradingPanel.jsx   # 4-tab panel: Open / Pending / History / Summary for paper trades
+│           ├── LiveTrackingPanel.jsx   # Same 4-tab structure for live trades + mode notice banner
+│           └── GuardrailsPanel.jsx     # Status cards for all 10 guardrails + events log + kill switch
 │
 ├── cloudflare/
 │   └── setup.md                      # Step-by-step Cloudflare DNS + Access configuration guide
@@ -140,10 +150,14 @@ myAITradingApp/
 │   ├── lint.yml                      # On PR: black + isort formatting checks
 │   └── test-guardrails.yml           # On PR: runs all 14 guardrail tests
 │
-├── scripts/
-│   ├── start.sh                      # Local dev startup — activates venv, loads .env.local, starts backend + frontend
+├── scripts/                          # Local dev + one-off diagnostic/reauth scripts (not deployed)
+│   ├── start.sh / start.ps1          # Local dev startup — activates venv, loads .env.local, starts backend + frontend
 │   ├── schwab_auth.py                # One-time OAuth flow to generate schwab_token.json for local dev
-│   └── backfill_paper_pnl.py         # One-time script — seeds cache#paper_pnl from existing closed trade history
+│   ├── schwab_reauth.py              # Re-auth when the Schwab token expires — also re-uploads to Secrets Manager and recycles the Schwab Lambdas
+│   ├── robinhood_reauth.py           # Re-auth when the Robinhood session expires
+│   ├── backfill_paper_pnl.py         # One-time script — seeds cache#paper_pnl from existing closed trade history
+│   ├── inspect_rh_position_fields.py # Diagnostic — dumps all average-cost fields + order history for one position
+│   └── (assorted test_*.py / verify_*.py) # One-off live-API diagnostic scripts, not part of the test suite
 │
 ├── template.yaml                     # SAM template — defines every AWS resource
 ├── samconfig.toml                    # SAM deploy defaults (region, stack name)
@@ -258,9 +272,12 @@ Backend:     routers/portfolio.py → get_portfolio()
                └─ portfolio_factory.get_provider()
                     PORTFOLIO_MODE=live      → robinhood_service.get_portfolio()
                     PORTFOLIO_MODE=synthetic → synthetic_portfolio.get_portfolio()
-               └─ _enrich_positions(positions)
+               └─ schwab_service.enrich_positions_with_quotes(positions)
                     └─ schwab_service.get_batch_quotes([all tickers]) — one batch call
                     └─ Computes per position: current_price, unrealized_pnl, unrealized_pnl_pct
+                    └─ Shared helper — also used by context_loader.py and claude_service.py's
+                       get_portfolio tool, so the frontend, briefing/chat context, and Claude's
+                       own trade reasoning all compute P&L identically
 
 Response:    Cash balance + table: ticker, shares, avg cost, current price, unrealized P&L + %
              P&L values colored green (profit) / red (loss)
@@ -348,7 +365,11 @@ Backend:     routers/ai.py → suggest_trades(request)
                     - minutes_remaining
 
                └─ claude_service.suggest_trades(seed, message, allow_loss)
-                    └─ _agentic_call(system, payload, tools, finish_tool="submit_trade_suggestions")
+                    └─ _agentic_call(system, payload, tools, finish_tool="submit_trade_suggestions",
+                                      max_iterations=10)
+                         │  system + tools are marked as Anthropic prompt-cache breakpoints —
+                         │  both are identical on every turn, so later turns skip re-processing
+                         │  that static content instead of paying full latency for it each time.
                          │
                          │  Iteration 1 — Claude calls tools to gather market data:
                          ├─ get_top_movers()
@@ -357,63 +378,97 @@ Backend:     routers/ai.py → suggest_trades(request)
                          │    └─ Returns list of today's top movers (price, change %, vol)
                          │
                          │  Iteration 2 — Claude calls with specific tickers:
-                         ├─ get_technical_indicators(tickers=[...movers..., "TQQQ", "SQQQ", "IONZ", "IONQ"])
+                         ├─ get_technical_indicators(tickers=[...movers..., "TQQQ", "SQQQ",
+                         │                                     "IONZ", "IONQ", "NVDA", "SPCX"])
                          │    └─ TQQQ/SQQQ are opposing 3x-leveraged Nasdaq-100 bets — evaluated
                          │       independently, never suggested together
                          │    └─ IONZ requested → IONQ auto-added as a safety net (IONZ is -2x
                          │       inverse of the single stock IONQ, not a broad index — Claude
                          │       checks IONQ's structure confirms before trusting IONZ)
-                         │    └─ schwab_service.get_technical_indicators(tickers)
+                         │    └─ schwab_service.get_technical_indicators(tickers) — batched,
+                         │         parallel fetch under the hood, one round trip regardless of
+                         │         ticker count
                          │         └─ Fetches 1-min bars for each ticker
-                         │         └─ Aggregated into 5-min buckets for ORH/ORL/EMA —
+                         │         └─ Aggregated into 5-min buckets for ORH/ORL —
                          │            preserves the original 15-min/30-min EMA lookback
                          │         └─ bucket[0] = opening 9:30-9:35am range
-                         │         └─ Computes per ticker:
-                         │              orh: opening range high (high of first bucket)
-                         │              orl: opening range low  (low of first bucket)
-                         │              ema_3, ema_6: EMAs across 5-min bucket closes
-                         │              vwap: cumulative volume-weighted avg price (1-min)
-                         │              rvol: current 1-min candle's volume vs a weighted
-                         │                    baseline of every prior 1-min candle today.
-                         │                    Only the 9:30-9:31am opening print is
-                         │                    down-weighted by half (genuine outlier); the
-                         │                    rest of the opening range trades at full weight.
-                         │                    Informational only — not a hard gate.
-                         │              bounce_setup: true when EMA(3)>EMA(6) AND
-                         │                            price>VWAP AND price>=ORH
+                         │         └─ Computes per ticker: orh, orl, ema_3, ema_6, sma_10, sma_20,
+                         │              vwap, rvol (+ peak_rvol/rvol_pct_of_peak), current_price,
+                         │              bounce_setup, pullback_setup, breakdown_setup,
+                         │              pulldown_setup — see "Opening Range Strategy" below
                          │
                          ├─ get_portfolio()
-                         │    └─ portfolio_factory → positions enriched with current prices
+                         │    └─ portfolio_factory → positions enriched via
+                         │       schwab_service.enrich_positions_with_quotes()
                          │
                          ├─ get_sentiment(tickers=[...candidates...])  [optional]
                          │    └─ DDB cache hit or finnhub_service.score_batch_sentiment()
                          │
+                         ├─ get_option_chain(tickers=[...every qualifying ticker...])
+                         │    [only when INCLUDE_OPTIONS_SUGGESTIONS=true, the default — see below]
+                         │    └─ Called ONCE with every qualifying ticker together (batched,
+                         │       parallel per-ticker under the hood) — never per-ticker, which
+                         │       previously exhausted the iteration budget on busy days
+                         │    └─ schwab_service.get_option_chains(tickers) — real calls/puts,
+                         │       strikes/expirations/Greeks/OI/volume/spread per contract
+                         │
+                         │  Optional, rarely needed:
+                         ├─ get_quotes(tickers)         — real-time last price only
+                         ├─ get_scanner_results(min_pct) — movers filtered by min % change
+                         │
                          │  Final step — Claude must call the finish tool to answer:
-                         └─ tool_use "submit_trade_suggestions" → its input IS the parsed dict
+                         └─ tool_use "submit_trade_suggestions" → its input IS the parsed dict,
+                              validated against a oneOf[equity, option] schema per suggestion
                               (schema-enforced by the tool's input_schema — Claude cannot
                               answer with free text; if it tries, it is nudged to call the
                               tool instead and the loop continues)
 
                     └─ TradeSuggestionResponse.model_validate(parsed)
+                    └─ Server-side, post-hoc corrections on every option suggestion (never
+                       trusted from Claude's own arithmetic):
+                         claude_service._apply_profit_targets()      — overrides target_price
+                           from real opening-range size/rvol + the contract's delta/gamma
+                         claude_service._apply_hit_probabilities()   — populates ml_probability
+                           (informational touch-probability, lognormal + gamma-aware PDE)
+                         claude_service._apply_expected_value()      — populates stop_probability
+                           + expected_value (partial EV; the "hits neither barrier" case is
+                           unmodeled, flagged via ev_calibration_note)
                     └─ Server-side guardrail checks on every suggestion:
                          guardrail_service.check_all(trade, GuardrailContext)
                     └─ If recommended trade fails guardrails:
                          dynamo_service.log_guardrail_event(...)
                          suggestion.recommended = None
 
-Suggestion   Only LONG trades suggested. Valid setup requires bounce_setup=true —
-strategy:    price broke above the ORH (Opening Range High) and is holding there
-             with EMA(3) > EMA(6) and price above VWAP. Entry at/above ORH; stop
-             just below ORL. Tickers where price_below_orl=true are excluded.
-             TQQQ, SQQQ, IONZ, and IONQ always included regardless of scanner ranking.
-             Minimum reward/risk ratio: 1.5. Daily goal: $400.
+Suggestion   Options are the default cash_intraday expression, gated by
+strategy:    INCLUDE_OPTIONS_SUGGESTIONS (default true; false is an emergency kill switch
+             back to the original equity-only, bullish-only behavior):
+               - Bullish (bounce_setup or pullback_setup) → long CALL by default, falling
+                 back to an equity long only if no viable contract passes the option
+                 liquidity/DTE guardrails.
+               - Bearish (breakdown_setup or pulldown_setup) → long PUT only — no equity
+                 fallback, since the equity system never shorts. Ticker is excluded
+                 entirely if no viable put exists.
+               - Strike selection: nearest 0.40-0.60 delta, near-the-money.
+               - Expiration window actually enforced: 0-7 days to expiration (both
+                 schwab_service's option-chain fetch and the expiration_proximity
+                 guardrail) — narrowed from an original 7-21 day window on 2026-07-15
+                 once the target-price/hit-probability math accounted for gamma.
+               - Contract sizing: 15% of available cash, capped down (never up) by the
+                 position size guardrail: `contracts = floor((cash * 0.15) / (premium * 100))`.
+               - Stop loss ≈ -35% of entry premium; target premium is Claude's placeholder,
+                 immediately overridden server-side (see _apply_profit_targets above).
+               - multiplier is 100 for options, 1 for equity.
+             TQQQ, SQQQ, IONZ, IONQ, NVDA, and SPCX are always included in the indicator
+             fetch regardless of scanner ranking. Minimum reward/risk ratio: 1.0.
 
-Response:    Each suggestion as a card showing all trade parameters
+Response:    Each suggestion as a card showing all trade parameters, plus (options only)
+             ml_probability ("Hit prob"), stop_probability ("Stop prob"), and
+             expected_value ("EV") badges
              Recommended trade highlighted; R/R and confidence displayed per card
 Error path:  "Trade suggestion failed: <reason>" error message
 ```
 
-Suggestions are structured Pydantic-validated data, not free text. Claude fetches data on-demand via tools (agentic loop) rather than receiving a pre-built context blob — it calls `get_top_movers` first, then decides which tickers warrant deeper indicator analysis. Every suggestion includes plain-English Robinhood instructions because the app never places orders directly.
+Suggestions are structured Pydantic-validated data, not free text. Claude fetches data on-demand via tools (agentic loop) rather than receiving a pre-built context blob — it calls `get_top_movers` first, then decides which tickers warrant deeper indicator analysis. Every suggestion includes plain-English Robinhood instructions (never "exercise" for options — "buy to open" / "sell to close") because the app never places orders directly.
 
 ---
 
@@ -535,11 +590,11 @@ Close form:  POST /api/live-trades/{id}/exit
 
 ---
 
-### 11. Price Monitor (Scheduled — Every 5 Minutes)
+### 11. Price Monitor (Scheduled — Every Minute)
 
 ```
-Trigger:     AWS EventBridge: cron(*/5 13-20 ? * MON-FRI *)
-             Every 5 min, Mon–Fri, 9:30am–4pm ET
+Trigger:     AWS EventBridge: cron(* 9-16 ? * MON-FRI *)  [America/New_York]
+             Every minute, Mon–Fri, 9:00am–4:59pm ET
 
 Lambda:      main.py → price_monitor_handler()
                └─ cache_service.run_price_monitor()
@@ -630,7 +685,7 @@ The GSI (`status-date-index`) is what makes queries like "all open trades from t
 
 ### Trade items
 
-Written by `paper_trading_service.open_trade()` and `dynamo_service.put_trade()`. Key fields: `ticker`, `direction` (`long`/`short`), `entry_price`, `target_price`, `stop_loss`, `shares`, `status` (`open`/`closed`), `mode` (`paper`/`live`), `realized_pnl` (null until closed), `close_reason` (`target_hit`/`stop_hit`/`manual`/`eod_close`/`kill_switch`).
+Written by `paper_trading_service.open_trade()` and `dynamo_service.put_trade()`. Key fields: `instrument_type` (`equity`/`option`), `ticker`, `direction` (`long`/`short`), `entry_price`, `target_price`, `stop_loss`, `shares`, `multiplier` (1 for equity, 100 for options), `status` (`open`/`closed`), `mode` (`paper`/`live`), `realized_pnl` (null until closed), `close_reason` (`target_hit`/`stop_hit`/`manual`/`eod_close`/`kill_switch`). Option trades additionally carry `option_symbol`, `option_type`, `strike_price`, `expiration_date`, `days_to_expiration`, `breakeven_price`, `delta_at_entry`, `implied_volatility_at_entry`, `bid_ask_spread_pct`, `open_interest`, `volume`, `underlying_price_at_entry` (all `null` on equity trades), plus the informational, non-gating `ml_probability`/`stop_probability`/`expected_value`/`ev_calibration_note` fields populated by `claude_service.py`'s gamma-aware double-barrier PDE model — see "Trade Suggestions" above.
 
 ### Cache items
 
@@ -743,6 +798,11 @@ EventBridge (Mon–Fri 3:45pm ET)
     └──▶ EndOfDayFunction → cache_service.run_end_of_day()
               Close all open paper trades at last price
               Flag all open live trades for manual close
+
+EventBridge (nightly, 10:00pm UTC, every day)
+    └──▶ AnalyticsFunction → main.analytics_handler()
+              Scaffolded for Phase 2 (validation/Monte Carlo/Plotly) — handler
+              is currently a no-op stub, not yet implemented
 ```
 
 ### CI/CD Pipeline
@@ -782,18 +842,20 @@ Required GitHub repository secrets: `AWS_DEPLOY_ROLE_ARN`, `PUBLIC_API_URL`, `PR
 
 ## Guardrails Reference
 
-All 8 guardrails run through `guardrail_service.check_all()` in `backend/services/guardrail_service.py`. Same checks for paper and live. Current config: daily goal $400, max 2 trades/day, max position size 40% of cash.
+All 10 guardrails run through `guardrail_service.check_all()` in `backend/services/guardrail_service.py`. Same checks for paper and live; the last two are no-ops for equity trades (`instrument_type != "option"`). Current config: max 2 trades/day, max position size 20% of cash, daily loss limit $1,500 (sized up from the original $200 equity-only limit for the options pivot — a single full-sized option loss can be a meaningful chunk of it, so treat "2 trades/day" as more of a ceiling than a guarantee of two independent full-sized attempts).
 
 | Guardrail | What it checks | Triggered when |
 |-----------|---------------|----------------|
-| `daily_loss_limit` | Total realized P&L today | Losses reach `DAILY_LOSS_LIMIT` ($200 default) |
-| `position_size_cap` | Trade value vs available cash | Position exceeds `MAX_POSITION_SIZE_PCT` (40% default) of cash |
-| `cost_basis_protection` | Entry price vs avg cost on held positions | Entry is below your cost basis — would realize a loss on a winner. Override with `allow_loss=true` |
-| `reward_risk_minimum` | Target gain ÷ max loss | Ratio is below 1.5 |
-| `daily_trade_limit` | Trades placed today | `DAILY_TRADE_LIMIT` (2 default) already reached. Bypassed when `PDT_EXEMPT=true` in SSM (for accounts above the $25k PDT threshold) |
+| `daily_loss_limit` | Total realized P&L today (shared counter, equity + options) | Losses reach `DAILY_LOSS_LIMIT` ($1,500 default) |
+| `position_size_cap` | Trade value vs available cash | Position exceeds `MAX_POSITION_SIZE_PCT` (20% default) of cash |
+| `cost_basis_protection` | Entry price vs avg cost on held positions | Entry is below your cost basis — would realize a loss on a winner. Override with `allow_loss=true`. No-op for options (no cost-basis averaging concept there) |
+| `reward_risk_minimum` | Target gain ÷ max loss | Ratio is below 1.0 |
+| `daily_trade_limit` | Trades placed today (shared counter) | `DAILY_TRADE_LIMIT` (2 default) already reached. Bypassed when `PDT_EXEMPT=true` in SSM (for accounts above the $25k PDT threshold) |
 | `market_hours_lock` | Current time (ET) | Outside 9:30am–4:00pm ET, Monday–Friday |
-| `intraday_30min_cutoff` | Current time for intraday trades | After 3:30pm ET — less than 30 minutes left in session |
+| `intraday_30min_cutoff` | Current time, `intraday_cash` trades only | At/after 3:30pm ET — less than 30 minutes left in session |
 | `buying_power_check` | Trade value vs cash balance | Insufficient cash to cover the full position |
+| `option_liquidity_check` | Bid-ask spread % and open interest — **options only** | Spread exceeds `OPTION_MAX_SPREAD_PCT` (15% default) or open interest is below `OPTION_MIN_OPEN_INTEREST` (50 default) |
+| `expiration_proximity` | Days to expiration — **options only** | Below `OPTION_MIN_DTE` (0 default) or above `OPTION_MAX_DTE` (7 default). Narrowed from an original 7-21 day window on 2026-07-15 |
 
 **Kill switch:** Two-step confirm in GuardrailsPanel. Immediately closes all open paper trades (`close_reason="kill_switch"`) and sets `flagged_for_manual_close=true` on live trades. The app never auto-closes live positions.
 
@@ -816,32 +878,46 @@ All 8 guardrails run through `guardrail_service.check_all()` in `backend/service
 
 **`.env.example`** — Documents every required variable with empty values. Safe to commit. Reference for what needs to go into SSM/Secrets Manager before first AWS deploy.
 
-Non-secret config (PORTFOLIO_MODE, TRADING_MODE, DAILY_GOAL, etc.) uses plain SSM parameters resolved at deploy time — baked into Lambda environment variables. API key secrets (Anthropic, Finnhub, Schwab client ID/secret) use SSM SecureString fetched at **runtime** by `ssm_service.get_secret()` on Lambda cold start, then cached for the container lifetime. Secrets Manager values (Schwab token, Robinhood credentials) are also fetched at runtime — always the current version, which is why Schwab token auto-rotation works transparently.
+Non-secret config uses plain SSM parameters resolved at deploy time — baked into Lambda environment variables. API key secrets (Anthropic, Finnhub, Schwab client ID/secret) use SSM SecureString fetched at **runtime** by `ssm_service.get_secret()` on Lambda cold start, then cached for the container lifetime. Secrets Manager values (Schwab token, Robinhood credentials) are also fetched at runtime — always the current version, which is why Schwab token auto-rotation works transparently.
+
+### Non-secret config variables
+
+`.env.example` documents the original set (`PORTFOLIO_MODE`, `TRADING_MODE`, `TRADE_SCOPE`, `PROFIT_MODE`, `DAILY_GOAL`, `DAILY_LOSS_LIMIT`, `MAX_POSITION_SIZE_PCT`, `DAILY_TRADE_LIMIT`). The options pivot added several more that read straight from `os.environ` with code-level defaults and are **not yet reflected in `.env.example`**:
+
+| Variable | Default | Read by |
+|----------|---------|---------|
+| `PDT_EXEMPT` | `false` | `guardrail_service.py` — bypasses `daily_trade_limit` for accounts above the $25k PDT threshold |
+| `INCLUDE_OPTIONS_SUGGESTIONS` | `true` | `claude_service.py` — options-primary suggestion behavior; `false` is an emergency kill switch back to equity-only |
+| `OPTION_MIN_DTE` | `0` | `schwab_service.py` (option chain fetch) and `guardrail_service.py` (`expiration_proximity`) |
+| `OPTION_MAX_DTE` | `7` | Same as above |
+| `OPTION_MAX_SPREAD_PCT` | `15` | `guardrail_service.py` — `option_liquidity_check` |
+| `OPTION_MIN_OPEN_INTEREST` | `50` | `guardrail_service.py` — `option_liquidity_check` |
 
 ---
 
 ## Opening Range Strategy
 
-Claude's trade suggestions are built around the 5-minute opening range — the price band established in the first candle of the session (9:30–9:35am ET). `schwab_service.get_technical_indicators()` fetches intraday **1-min** bars for each candidate ticker, then aggregates them into 5-min buckets for ORH/ORL/EMA — preserving their original 15-min/30-min lookback character — while using the raw 1-min series for RVOL and current price. It computes:
+Claude's trade suggestions are built around the 5-minute opening range — the price band established in the first candle of the session (9:30–9:35am ET). `schwab_service.get_technical_indicators()` fetches intraday **1-min** bars for each candidate ticker, then aggregates them into 5-min buckets for ORH/ORL — preserving the original 15-min/30-min EMA lookback character — while using the raw 1-min series for SMA(10)/SMA(20), VWAP, RVOL, and current price. It computes (abbreviated — see `_compute_indicators_from_candles()`'s docstring for the full field list, including the bearish mirrors of everything below):
 
 | Field | Meaning |
 |-------|---------|
-| `orh` | Opening Range High — high of the 9:30–9:35am bucket (first 5 one-min candles) |
-| `orl` | Opening Range Low — low of the 9:30–9:35am bucket |
-| `ema_3` | EMA across 5-min bucket closes today (short-term momentum) |
-| `ema_6` | EMA across 5-min bucket closes today (medium-term trend) |
+| `orh` / `orl` | Opening Range High/Low — high/low of the 9:30–9:35am bucket (first 5 one-min candles) |
+| `ema_3` / `ema_6` | EMAs across 5-min bucket closes today — **reference only**, no longer drive setup qualification |
+| `sma_10` / `sma_20` | True 10/20-period simple moving averages on 1-min closes — null until enough candles have printed (~20 min into the session). These, alongside VWAP, are what actually drive setup qualification below |
 | `vwap` | Cumulative volume-weighted average price since open (1-min resolution) |
-| `rvol` | Current 1-min candle's volume vs. a weighted average of every prior 1-min candle today. Only the 9:30-9:31am opening print (the opening auction, a genuine one-minute outlier) is down-weighted by half; candles 2-5 of the opening range trade at full weight since they already behave like normal continuous flow. Informational only, not a hard gate — Claude weighs it in its rationale and confidence. |
-| `bounce_setup` | `true` when EMA(3) > EMA(6) AND price > VWAP AND price ≥ ORH |
-| `price_below_orl` | `true` when price has broken below the opening range low (bearish — skip) |
+| `rvol` (+ `peak_rvol`, `rvol_pct_of_peak`) | Current 1-min candle's volume vs. a weighted average of every prior 1-min candle today. Only the 9:30-9:31am opening print is down-weighted by half; the rest of the opening range trades at full weight. `peak_rvol`/`rvol_pct_of_peak` separate "never had real volume" from "spiked hard, now cooling off but still active." Informational only, not a hard gate. |
+| `bounce_setup` | Bullish breakout: current 5-min bucket's own open AND close both clear the ORH, plus price above VWAP, SMA(10), and SMA(20) all at once |
+| `pullback_setup` | Bullish continuation: ORH already broken earlier today, price has pulled back but is still holding above VWAP/SMA(10)/SMA(20), and the ORL was never actually breached at its worst point |
+| `breakdown_setup` | Bearish mirror of `bounce_setup` — added for the options pivot to qualify long-PUT candidates |
+| `pulldown_setup` | Bearish mirror of `pullback_setup` |
 
-A valid long setup requires `bounce_setup=true`: the stock broke above its ORH and is holding there with bullish EMA momentum and net-positive buying pressure (above VWAP). Entry is at or just above the ORH; the ORH becomes support. Stop loss sits just below the ORL — if price retreats there, the opening structure has failed.
+A valid bullish setup requires `bounce_setup` or `pullback_setup` — see the options-primary rules in "Trade Suggestions" above for how that becomes a long call (or equity fallback). A valid bearish setup requires `breakdown_setup` or `pulldown_setup`, which becomes a long put with no equity fallback. A ticker showing none of the four is excluded from suggestions entirely.
 
-**IONZ / IONQ:** IONZ is a small fund that is -2x inverse of the single stock IONQ (not a broad index). Whenever `get_technical_indicators` is called with IONZ, `claude_service._execute_tool()` automatically adds IONQ to the request as a safety net (IONQ is also always pinned directly, so this rarely triggers). Claude is instructed to check that IONQ's own structure (e.g. a broken ORL) actually confirms an IONZ long before treating it as high-conviction, since IONZ's own tape is thin and noisy on its own.
+**IONZ / IONQ:** IONZ is a small fund that is -2x inverse of the single stock IONQ (not a broad index). Whenever `get_technical_indicators` is called with IONZ, `claude_service._execute_tool()` automatically adds IONQ to the request as a safety net (IONQ is also always pinned directly, so this rarely triggers). Claude is instructed to check that IONQ's own structure actually confirms an IONZ trade before treating it as high-conviction, since IONZ's own tape is thin and noisy on its own.
 
-**TQQQ / SQQQ:** SQQQ is the -3x leveraged inverse of the Nasdaq-100, the mirror image of TQQQ's +3x exposure. Since the strategy only suggests long trades, a bearish view on the Nasdaq is expressed as a long SQQQ trade rather than a short. Claude evaluates TQQQ and SQQQ independently against `bounce_setup` and is instructed never to suggest both at once, since they're opposing bets on the same underlying index.
+**TQQQ / SQQQ:** SQQQ is the -3x leveraged inverse of the Nasdaq-100, the mirror image of TQQQ's +3x exposure. A bearish view on the Nasdaq can be expressed either as a long SQQQ position or a long put on some other qualifying ticker — Claude evaluates TQQQ and SQQQ independently against `bounce_setup`/`breakdown_setup` and is instructed never to suggest both at once, since they're opposing bets on the same underlying index. The app itself never shorts or writes/sells options — every position, bullish or bearish, is opened by buying (a long call, a long put, or a long share position).
 
-`TQQQ`, `SQQQ`, `IONZ`, and `IONQ` are always included in the indicator fetch regardless of where they rank on the day's scanner, because they won't appear in Schwab's index-component mover API but are always in scope as candidates.
+`TQQQ`, `SQQQ`, `IONZ`, `IONQ`, `NVDA`, and `SPCX` are always included in the indicator fetch regardless of where they rank on the day's scanner, because some won't appear in Schwab's index-component mover API but are always in scope as candidates.
 
 **Timing cautions (informational, non-blocking):** Two flags in the `suggest-trades` seed payload warn Claude about lower-quality-setup windows without stopping suggestions:
 - `before_10am_et` — true from 9:30-10:00am ET, while the opening range is still fresh and breakouts are more prone to reversing before they're confirmed.

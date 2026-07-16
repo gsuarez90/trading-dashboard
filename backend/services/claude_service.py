@@ -119,8 +119,8 @@ Options as the default cash_intraday expression (equity fallback for bullish onl
   long PUT, sourced the same way (0.40-0.60 delta near-the-money). There is no equity fallback
   for bearish — the equity system never shorts — so if no viable put exists, exclude the ticker
   entirely rather than suggesting anything.
-- Only use expirations get_option_chain already returned — it only queries the 7-21 day
-  window, so every contract you see already clears the floor/ceiling.
+- Only use expirations get_option_chain already returned — it only queries the {min_dte}-{max_dte}
+  day window, so every contract you see already clears the floor/ceiling.
 - Size contracts to 15% of available cash: contracts = floor((cash * 0.15) /
   (premium * 100)). This is what determines contract count — not the position
   size cap. The cap is a separate backstop that may allow a larger position; do
@@ -453,12 +453,14 @@ def _build_tools(include_options: bool = False) -> list[dict]:
         },
     ]
     if include_options:
+        min_dte = int(os.environ.get("OPTION_MIN_DTE", 0))
+        max_dte = int(os.environ.get("OPTION_MAX_DTE", 7))
         tools.append(
             {
                 "name": "get_option_chain",
                 "description": (
-                    "Fetch real option-chain contracts (calls and puts, 7-21 days to "
-                    "expiration, near-the-money) for one or more underlying tickers in a "
+                    f"Fetch real option-chain contracts (calls and puts, {min_dte}-{max_dte} days "
+                    "to expiration, near-the-money) for one or more underlying tickers in a "
                     "single call — strikes, bid/ask, mark, Greeks, open interest, volume. "
                     "Pass every ticker you're seriously considering at once rather than "
                     "calling this once per ticker — each call is a full round trip, and the "
@@ -1339,6 +1341,11 @@ def _build_suggestion_system(
 ) -> str:
     if include_options is None:
         include_options = _include_options_suggestions()
+    options_primary_section = ""
+    if include_options:
+        min_dte = int(os.environ.get("OPTION_MIN_DTE", 0))
+        max_dte = int(os.environ.get("OPTION_MAX_DTE", 7))
+        options_primary_section = _OPTIONS_PRIMARY_SECTION.format(min_dte=min_dte, max_dte=max_dte)
     return _SUGGESTION_SYSTEM.format(
         profit_mode=profit_mode,
         trade_scope=trade_scope,
@@ -1347,7 +1354,7 @@ def _build_suggestion_system(
         bearish_handling=(
             _BEARISH_HANDLING_WITH_OPTIONS if include_options else _BEARISH_HANDLING_EQUITY_ONLY
         ),
-        options_primary_section=(_OPTIONS_PRIMARY_SECTION if include_options else ""),
+        options_primary_section=options_primary_section,
     )
 
 
