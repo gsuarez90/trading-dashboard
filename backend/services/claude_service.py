@@ -9,6 +9,7 @@ import anthropic
 from models.schemas import TradeSuggestionResponse
 from services import dynamo_service, finnhub_service, portfolio_factory, schwab_service
 from services.context_loader import (
+    _PINNED_TICKERS,
     DailyContext,
     _cached_scanner_results,
     _cached_sentiment,
@@ -153,8 +154,13 @@ one batched call, not several.
 _SUGGESTION_SYSTEM = """\
 You are a personal trading analyst assistant. You have tools to fetch live market data.
 Call them in this recommended sequence before generating suggestions:
-1. get_top_movers — identify today's active names
-2. get_technical_indicators — pass the mover tickers plus TQQQ, SQQQ, IONZ, IONQ, NVDA, and SPCX
+1. get_top_movers — identify today's active names. Its results already include TQQQ, SQQQ,
+   IONZ, IONQ, NVDA, and SPCX merged in alongside the scanner movers, each with real
+   price/change %/volume — not just the movers.
+2. get_technical_indicators — reason over that full combined list (movers + the six pinned
+   tickers) together and pick the ~6 tickers overall with the strongest combination of %
+   change and volume. You don't need full indicators on every ticker get_top_movers
+   returned, just the most promising six total.
 3. get_portfolio — current positions with enriched prices and P&L
 4. get_sentiment — pass the tickers you are seriously considering
 {option_chain_step}
@@ -381,8 +387,13 @@ def _build_tools(include_options: bool = False) -> list[dict]:
         {
             "name": "get_top_movers",
             "description": (
-                "Fetch today's top intraday movers (up to 10) with price, change %, and volume. "
-                "Call this first — use the returned tickers as input to get_technical_indicators."
+                "Fetch today's top intraday movers (up to 10) with price, change %, and volume — "
+                "TQQQ, SQQQ, IONZ, IONQ, NVDA, and SPCX are always merged into the results too, "
+                "each with the same real price/change %/volume data, since they won't otherwise "
+                "appear here on their own. Call this first — from the full combined list, select "
+                "only the ~6 tickers total with the strongest combination of % change and volume "
+                "before calling get_technical_indicators. You don't need full indicators on every "
+                "ticker returned, just the most promising ones."
             ),
             "input_schema": {"type": "object", "properties": {}, "required": []},
         },
@@ -419,10 +430,11 @@ def _build_tools(include_options: bool = False) -> list[dict]:
             "name": "get_technical_indicators",
             "description": (
                 "Fetch 5-min opening range indicators (ORH, ORL, SMA(10), SMA(20), VWAP, "
-                "RVOL, bounce_setup) for a list of tickers. Always include TQQQ, SQQQ, IONZ, "
-                "IONQ, NVDA, and SPCX. Call get_top_movers first, then pass those tickers plus "
-                "TQQQ, SQQQ, IONZ, IONQ, NVDA, and SPCX here. IONQ is also fetched automatically "
-                "whenever IONZ is requested, as a safety net."
+                "RVOL, bounce_setup) for a list of tickers. Call get_top_movers first — its "
+                "results already include TQQQ, SQQQ, IONZ, IONQ, NVDA, and SPCX alongside the "
+                "scanner movers — then pass only the ~6 tickers total you selected from that "
+                "combined list as the most promising, not every ticker it returned. IONQ is "
+                "also fetched automatically whenever IONZ is requested, as a safety net."
             ),
             "input_schema": {
                 "type": "object",
@@ -430,7 +442,7 @@ def _build_tools(include_options: bool = False) -> list[dict]:
                     "tickers": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Ticker symbols. Always include TQQQ, SQQQ, IONZ, IONQ, NVDA, and SPCX.",
+                        "description": "The ~6 tickers selected from get_top_movers' combined results.",
                     }
                 },
                 "required": ["tickers"],
@@ -650,6 +662,25 @@ def _build_submit_suggestions_tool(include_options: bool) -> dict:
     }
 
 
+def _movers_with_pinned_guaranteed(movers: list[dict], top_n: int = 10) -> list[dict]:
+    """Keep the top_n movers by abs(change_pct), plus any _PINNED_TICKERS present in
+    the same result set regardless of rank. Their quote data (price/change_pct/volume)
+    is already fetched as part of the same underlying call that produced `movers` — the
+    old code just discarded it via the top_n slice, since a thin/niche pinned ticker
+    rarely ranks in the top 10 by % change on its own. Preserving it costs nothing
+    extra, and gives Claude real signal to reason over when narrowing this combined
+    list down further (see _SUGGESTION_SYSTEM's get_technical_indicators step) instead
+    of the blind guesswork it'd otherwise have for tickers get_top_movers never surfaces.
+    """
+    ranked = sorted(movers, key=lambda m: abs(m.get("change_pct", 0)), reverse=True)
+    top = ranked[:top_n]
+    top_tickers = {m["ticker"] for m in top}
+    pinned_extra = [
+        m for m in ranked if m["ticker"] in _PINNED_TICKERS and m["ticker"] not in top_tickers
+    ]
+    return top + pinned_extra
+
+
 def _execute_tool(name: str, tool_input: dict) -> dict | list:
     logger.info("Tool call: %s inputs=%s", name, tool_input)
     if name == "get_portfolio":
@@ -661,8 +692,10 @@ def _execute_tool(name: str, tool_input: dict) -> dict | list:
     if name == "get_top_movers":
         cached = _cached_scanner_results(min_change_pct=0)
         if cached is not None:
-            return sorted(cached, key=lambda m: abs(m.get("change_pct", 0)), reverse=True)[:10]
-        return schwab_service.get_previous_day_movers(_get_watchlist(), limit=10)
+            return _movers_with_pinned_guaranteed(cached)
+        watchlist = _get_watchlist()
+        live = schwab_service.get_previous_day_movers(watchlist, limit=len(watchlist))
+        return _movers_with_pinned_guaranteed(live)
     if name == "get_scanner_results":
         min_pct = float(tool_input.get("min_change_pct", 2.0))
         cached = _cached_scanner_results(min_pct)

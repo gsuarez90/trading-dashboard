@@ -130,6 +130,35 @@ def test_execute_tool_get_option_chain_routes_to_batched_schwab_service(monkeypa
 def test_guardrail_names_includes_option_checks():
     assert "option_liquidity_check" in claude_service._GUARDRAIL_NAMES
     assert "expiration_proximity" in claude_service._GUARDRAIL_NAMES
+
+
+def test_movers_with_pinned_guaranteed_keeps_low_ranked_pinned_tickers():
+    movers = [
+        {"ticker": "ATAI", "change_pct": 15.2},
+        {"ticker": "ASTS", "change_pct": -12.1},
+        {"ticker": "MRVL", "change_pct": 8.4},
+        {"ticker": "UNH", "change_pct": 6.1},
+        {"ticker": "MU", "change_pct": 5.9},
+        {"ticker": "INTC", "change_pct": 4.2},
+        {"ticker": "CSCO", "change_pct": 3.1},  # rank 7, not pinned -- should be dropped
+        {"ticker": "NVDA", "change_pct": 0.2},  # pinned, low rank -- must survive
+        {"ticker": "SPCX", "change_pct": 0.1},  # pinned, low rank -- must survive
+    ]
+    result = claude_service._movers_with_pinned_guaranteed(movers, top_n=6)
+    tickers = {m["ticker"] for m in result}
+    assert tickers == {"ATAI", "ASTS", "MRVL", "UNH", "MU", "INTC", "NVDA", "SPCX"}
+    assert "CSCO" not in tickers
+
+
+def test_movers_with_pinned_guaranteed_no_duplicate_when_pinned_ranks_in_top_n():
+    movers = [
+        {"ticker": "NVDA", "change_pct": 20.0},  # pinned, but also ranks #1 naturally
+        {"ticker": "ATAI", "change_pct": 5.0},
+    ]
+    result = claude_service._movers_with_pinned_guaranteed(movers, top_n=1)
+    tickers = [m["ticker"] for m in result]
+    assert tickers.count("NVDA") == 1
+    assert tickers == ["NVDA"]
     assert len(claude_service._GUARDRAIL_NAMES) == 10
 
 
