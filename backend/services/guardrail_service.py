@@ -46,6 +46,15 @@ def _check_daily_loss_limit(trade, ctx: GuardrailContext) -> tuple[bool, str]:
     # $1,500 default (up from equity-only $200) — sized for option positions
     # under the options pivot (intraday-options-pivot-plan.md §1).
     # Shared counter across equity and option trades, not per-instrument.
+    #
+    # allow_loss=true bypasses this the same explicit per-trade way it already
+    # bypasses cost_basis_protection — so a stop-out on an earlier trade today
+    # doesn't cost you your remaining daily_trade_limit attempts unless you
+    # choose to push through. daily_trade_limit still caps total trades
+    # regardless, so this doesn't permit unlimited trades, just lets the same
+    # override checkbox also cover this check.
+    if ctx.allow_loss:
+        return False, ""
     limit = float(os.environ.get("DAILY_LOSS_LIMIT", 1500))
     if ctx.realized_pnl_today <= -limit:
         return True, (

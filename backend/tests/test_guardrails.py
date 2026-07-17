@@ -155,6 +155,12 @@ def test_daily_loss_limit_does_not_trigger_prematurely():
     assert "daily_loss_limit" not in result.triggered
 
 
+def test_daily_loss_limit_bypassed_by_allow_loss():
+    ctx = _make_ctx(realized_pnl_today=-200.0, allow_loss=True)
+    result = check_all(_make_valid_trade(), ctx)
+    assert "daily_loss_limit" not in result.triggered
+
+
 def test_position_size_cap_enforced_server_side():
     # cash=$10k, 20% cap=$2k, position=100*21=$2,100 — exceeds cap
     trade = _make_valid_trade(entry_price=100.0, shares=21)
