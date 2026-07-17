@@ -76,6 +76,8 @@ def log_trade(
         entry_time=now_et.isoformat(),
         status="open",
         mode="live",
+        ml_probability=setup.ml_probability,
+        ml_calibration_note=setup.ml_calibration_note,
     )
     dynamo_service.put_trade(trade)
     return trade

@@ -202,6 +202,15 @@ class PaperTrade(BaseModel):
     open_interest: int | None = None
     volume: int | None = None
     underlying_price_at_entry: float | None = None
+    # Informational only, captured at open time for later calibration against
+    # realized outcomes — never used to gate anything. ml_probability/note apply
+    # to both equity and option trades; stop_probability/expected_value/note are
+    # option-only, same as claude_service._apply_expected_value's own scope.
+    ml_probability: float | None = None
+    ml_calibration_note: str | None = None
+    stop_probability: float | None = None
+    expected_value: float | None = None
+    ev_calibration_note: str | None = None
     setup_type: str
     status: str  # "pending" | "open" | "closed" | "expired"
     mode: str  # "paper" | "live"

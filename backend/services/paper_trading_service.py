@@ -82,6 +82,8 @@ def open_trade(
         mode=trading_mode,
         limit_price=setup.entry_price,
         pending_since=now_et.isoformat(),
+        ml_probability=setup.ml_probability,
+        ml_calibration_note=setup.ml_calibration_note,
     )
     if isinstance(setup, OptionTradeSetup):
         trade_kwargs.update(
@@ -97,6 +99,9 @@ def open_trade(
             open_interest=setup.open_interest,
             volume=setup.volume,
             underlying_price_at_entry=setup.underlying_price_at_entry,
+            stop_probability=setup.stop_probability,
+            expected_value=setup.expected_value,
+            ev_calibration_note=setup.ev_calibration_note,
         )
 
     trade = PaperTrade(**trade_kwargs)
