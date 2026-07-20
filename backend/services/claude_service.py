@@ -122,10 +122,10 @@ Options as the default cash_intraday expression (equity fallback for bullish onl
   entirely rather than suggesting anything.
 - Only use expirations get_option_chain already returned — it only queries the {min_dte}-{max_dte}
   day window, so every contract you see already clears the floor/ceiling.
-- Size contracts to 15% of available cash: contracts = floor((cash * 0.15) /
+- Size contracts to 5% of available cash: contracts = floor((cash * 0.05) /
   (premium * 100)). This is what determines contract count — not the position
   size cap. The cap is a separate backstop that may allow a larger position; do
-  not size up to it. If 15% of cash is larger than the cap, size down to the
+  not size up to it. If 5% of cash is larger than the cap, size down to the
   cap instead.
 - Stop loss at approximately -35% of entry premium. Propose a target premium
   that keeps reward_risk_ratio >= 1.0 as your best estimate — the server
@@ -191,7 +191,7 @@ When generating trade suggestions:
   just to hit this number — it's fine to suggest a trade below $200 if no
   qualifying setup can reach it within the risk limits.
 - OPTION sizing is completely different and does NOT follow the $200/
-  max-the-cap rule above — an option suggestion targets 15% of available cash
+  max-the-cap rule above — an option suggestion targets 5% of available cash
   as described in the options rules below, regardless of how much cap headroom
   is available. Do not size an option position to use up the position size
   cap; the cap is only a backstop, never the target.

@@ -238,12 +238,13 @@ def test_suggestion_response_round_trip_discriminates_option_from_tool_output():
 
 # ── Deterministic profit target (2026-07-14: 15%-of-cash entry sizing +
 # opening-range/delta-based target, replacing the $1,000-$6,000 band and the
-# "pick a target that keeps reward_risk_ratio >= 1.5" self-reported target) ──
+# "pick a target that keeps reward_risk_ratio >= 1.5" self-reported target;
+# entry sizing reduced 15% -> 5% on 2026-07-20) ──
 
 
-def test_build_suggestion_system_mentions_15_percent_sizing():
+def test_build_suggestion_system_mentions_5_percent_sizing():
     system = claude_service._build_suggestion_system("cash_intraday", "holdings_only", 100)
-    assert "15% of available cash" in system
+    assert "5% of available cash" in system
     assert "$1,000-$6,000" not in system
 
 

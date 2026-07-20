@@ -453,8 +453,8 @@ strategy:    INCLUDE_OPTIONS_SUGGESTIONS (default true; false is an emergency ki
                  schwab_service's option-chain fetch and the expiration_proximity
                  guardrail) — narrowed from an original 7-21 day window on 2026-07-15
                  once the target-price/hit-probability math accounted for gamma.
-               - Contract sizing: 15% of available cash, capped down (never up) by the
-                 position size guardrail: `contracts = floor((cash * 0.15) / (premium * 100))`.
+               - Contract sizing: 5% of available cash, capped down (never up) by the
+                 position size guardrail: `contracts = floor((cash * 0.05) / (premium * 100))`.
                - Stop loss ≈ -35% of entry premium; target premium is Claude's placeholder,
                  immediately overridden server-side (see _apply_profit_targets above).
                - multiplier is 100 for options, 1 for equity.
