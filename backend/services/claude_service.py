@@ -155,9 +155,9 @@ _SUGGESTION_SYSTEM = """\
 You are a personal trading analyst assistant. You have tools to fetch live market data.
 Call them in this recommended sequence before generating suggestions:
 1. get_top_movers — identify today's active names. Its results already include TQQQ, SQQQ,
-   IONZ, IONQ, NVDA, and SPCX merged in alongside the scanner movers, each with real
+   IONZ, IONQ, NVDA, SPCX, and SPY merged in alongside the scanner movers, each with real
    price/change %/volume — not just the movers.
-2. get_technical_indicators — reason over that full combined list (movers + the six pinned
+2. get_technical_indicators — reason over that full combined list (movers + the seven pinned
    tickers) together and pick the ~6 tickers overall with the strongest combination of %
    change and volume. You don't need full indicators on every ticker get_top_movers
    returned, just the most promising six total.
@@ -312,9 +312,9 @@ When generating trade suggestions:
       than one that never came close.
 {bearish_handling}
 - If no ticker meets all criteria, return an empty suggestions list.
-- TQQQ, SQQQ, IONZ, IONQ, NVDA, and SPCX are always included in technical_indicators regardless
-  of scanner ranking. Consider them as candidates if their bounce_setup qualifies, but deprioritize
-  them when a top mover presents a cleaner or higher-conviction setup.
+- TQQQ, SQQQ, IONZ, IONQ, NVDA, SPCX, and SPY are always included in technical_indicators
+  regardless of scanner ranking. Consider them as candidates if their bounce_setup qualifies,
+  but deprioritize them when a top mover presents a cleaner or higher-conviction setup.
 - SQQQ is the -3x leveraged inverse of the Nasdaq-100, the mirror image of TQQQ's +3x exposure —
   a bearish view on the Nasdaq is expressed as a long SQQQ trade, not a short. Evaluate TQQQ and
   SQQQ independently against bounce_setup; do not suggest both at once since they are opposing
@@ -388,8 +388,8 @@ def _build_tools(include_options: bool = False) -> list[dict]:
             "name": "get_top_movers",
             "description": (
                 "Fetch today's top intraday movers (up to 10) with price, change %, and volume — "
-                "TQQQ, SQQQ, IONZ, IONQ, NVDA, and SPCX are always merged into the results too, "
-                "each with the same real price/change %/volume data, since they won't otherwise "
+                "TQQQ, SQQQ, IONZ, IONQ, NVDA, SPCX, and SPY are always merged into the results "
+                "too, each with the same real price/change %/volume data, since they won't otherwise "
                 "appear here on their own. Call this first — from the full combined list, select "
                 "only the ~6 tickers total with the strongest combination of % change and volume "
                 "before calling get_technical_indicators. You don't need full indicators on every "
@@ -431,8 +431,8 @@ def _build_tools(include_options: bool = False) -> list[dict]:
             "description": (
                 "Fetch 5-min opening range indicators (ORH, ORL, SMA(10), SMA(20), VWAP, "
                 "RVOL, bounce_setup) for a list of tickers. Call get_top_movers first — its "
-                "results already include TQQQ, SQQQ, IONZ, IONQ, NVDA, and SPCX alongside the "
-                "scanner movers — then pass only the ~6 tickers total you selected from that "
+                "results already include TQQQ, SQQQ, IONZ, IONQ, NVDA, SPCX, and SPY alongside "
+                "the scanner movers — then pass only the ~6 tickers total you selected from that "
                 "combined list as the most promising, not every ticker it returned. IONQ is "
                 "also fetched automatically whenever IONZ is requested, as a safety net."
             ),

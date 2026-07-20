@@ -37,8 +37,9 @@ _DEFAULT_TICKERS = [
 ]
 
 # Always included in every context load regardless of dynamic watchlist ranking.
-# These won't appear in the Schwab movers API but we always want setup data for them.
-_PINNED_TICKERS = ["TQQQ", "SQQQ", "IONZ", "IONQ", "NVDA", "SPCX"]
+# These won't appear in the Schwab movers API (or rarely rank highly enough, in SPY's
+# case as a broad benchmark) but we always want setup data for them.
+_PINNED_TICKERS = ["TQQQ", "SQQQ", "IONZ", "IONQ", "NVDA", "SPCX", "SPY"]
 
 
 @dataclass

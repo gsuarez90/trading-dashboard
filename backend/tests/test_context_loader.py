@@ -36,4 +36,4 @@ def test_before_10am_false_midday():
 
 
 def test_pinned_tickers_include_tqqq_sqqq_ionz_ionq_nvda_and_spcx():
-    assert set(_PINNED_TICKERS) == {"TQQQ", "SQQQ", "IONZ", "IONQ", "NVDA", "SPCX"}
+    assert set(_PINNED_TICKERS) == {"TQQQ", "SQQQ", "IONZ", "IONQ", "NVDA", "SPCX", "SPY"}

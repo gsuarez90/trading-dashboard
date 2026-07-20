@@ -458,7 +458,7 @@ strategy:    INCLUDE_OPTIONS_SUGGESTIONS (default true; false is an emergency ki
                - Stop loss ≈ -35% of entry premium; target premium is Claude's placeholder,
                  immediately overridden server-side (see _apply_profit_targets above).
                - multiplier is 100 for options, 1 for equity.
-             TQQQ, SQQQ, IONZ, IONQ, NVDA, and SPCX are always included in the indicator
+             TQQQ, SQQQ, IONZ, IONQ, NVDA, SPCX, and SPY are always included in the indicator
              fetch regardless of scanner ranking. Minimum reward/risk ratio: 1.0.
 
 Response:    Each suggestion as a card showing all trade parameters, plus (options only)
@@ -917,7 +917,7 @@ A valid bullish setup requires `bounce_setup` or `pullback_setup` — see the op
 
 **TQQQ / SQQQ:** SQQQ is the -3x leveraged inverse of the Nasdaq-100, the mirror image of TQQQ's +3x exposure. A bearish view on the Nasdaq can be expressed either as a long SQQQ position or a long put on some other qualifying ticker — Claude evaluates TQQQ and SQQQ independently against `bounce_setup`/`breakdown_setup` and is instructed never to suggest both at once, since they're opposing bets on the same underlying index. The app itself never shorts or writes/sells options — every position, bullish or bearish, is opened by buying (a long call, a long put, or a long share position).
 
-`TQQQ`, `SQQQ`, `IONZ`, `IONQ`, `NVDA`, and `SPCX` are always included in the indicator fetch regardless of where they rank on the day's scanner, because some won't appear in Schwab's index-component mover API but are always in scope as candidates.
+`TQQQ`, `SQQQ`, `IONZ`, `IONQ`, `NVDA`, `SPCX`, and `SPY` are always included in the indicator fetch regardless of where they rank on the day's scanner, because some won't appear in Schwab's index-component mover API (or, in SPY's case, rarely rank highly enough as a broad benchmark) but are always in scope as candidates.
 
 **Timing cautions (informational, non-blocking):** Two flags in the `suggest-trades` seed payload warn Claude about lower-quality-setup windows without stopping suggestions:
 - `before_10am_et` — true from 9:30-10:00am ET, while the opening range is still fresh and breakouts are more prone to reversing before they're confirmed.
