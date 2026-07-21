@@ -211,6 +211,15 @@ When generating trade suggestions:
       informational only — weigh it in your rationale and confidence, but do
       not treat any specific rvol value as a hard requirement to qualify or
       reject a setup.
+    bucket_volume: raw share count traded in the current 5-min bucket —
+      absolute, not relative to the ticker's own baseline like rvol. A clean
+      breakout or breakdown tends to print somewhere around 1M+ shares here.
+      Among tickers that already qualify via bounce_setup/pullback_setup/
+      breakdown_setup/pulldown_setup, treat bucket_volume at or above roughly
+      700k (70%+ of 1M) as a factor that raises your confidence/priority for
+      that ticker over other qualifying candidates with thinner bucket_volume —
+      this never substitutes for the setup's own technical trigger, it only
+      helps rank among tickers that already cleared one.
     peak_rvol: the highest rvol reading for this ticker so far today.
     rvol_pct_of_peak: current rvol as a fraction of peak_rvol (e.g. 0.75 means
       volume has cooled to 75% of today's peak). Use this to separate "never

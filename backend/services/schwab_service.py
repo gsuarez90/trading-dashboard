@@ -391,6 +391,12 @@ def _compute_indicators_from_candles(candles: list[dict]) -> dict | None:
     (rather than a whole-day max) avoids an unrelated midday print elsewhere in
     the session — a block trade, a halt reopen — swamping the signal.
 
+    bucket_volume is the raw share count of the current 5-min bucket — absolute,
+    not relative to the ticker's own baseline like rvol. A clean breakout/
+    breakdown tends to print somewhere around 1M+ shares in this bucket
+    regardless of how thin the ticker normally trades, which rvol alone can't
+    distinguish from a low-float ticker spiking on comparatively small size.
+
     EMA(3) and EMA(6) seed with the first bucket's close (not an N-period SMA),
     matching how most charting platforms render EMA lines from the first bar
     rather than waiting for N complete periods — the same convention Robinhood's
@@ -449,7 +455,7 @@ def _compute_indicators_from_candles(candles: list[dict]) -> dict | None:
     complete). Otherwise returns:
     {
         orh, orl,                        # opening range high/low (9:30-9:35am)
-        ema_3, ema_6, sma_10, sma_20, vwap, rvol, peak_rvol, rvol_pct_of_peak,
+        ema_3, ema_6, sma_10, sma_20, vwap, rvol, bucket_volume, peak_rvol, rvol_pct_of_peak,
         pullback_from_high_pct, closest_approach_to_orl_pct, bars_since_breakout,
         peak_rvol_down, rvol_pct_of_peak_down, bounce_from_low_pct,
         closest_approach_to_orh_pct, bars_since_breakdown,
@@ -643,6 +649,11 @@ def _compute_indicators_from_candles(candles: list[dict]) -> dict | None:
 
     bucket_open = bucket_opens[-1]
     bucket_close = bucket_closes[-1]
+    # Raw share volume printed in this same current bucket — a clean breakout
+    # or breakdown tends to show up here around ~1M+ shares. Absolute, not
+    # relative like rvol, so it's the only field that can answer "how much
+    # real size traded on this candle" regardless of the ticker's own baseline.
+    bucket_volume = round(sum(float(c["volume"]) for c in buckets[-1]))
 
     bounce_setup = (
         bucket_open > orh
@@ -698,6 +709,7 @@ def _compute_indicators_from_candles(candles: list[dict]) -> dict | None:
         "sma_20": sma_20,
         "vwap": vwap,
         "rvol": rvol,
+        "bucket_volume": bucket_volume,
         "peak_rvol": peak_rvol,
         "rvol_pct_of_peak": rvol_pct_of_peak,
         "pullback_from_high_pct": pullback_from_high_pct,

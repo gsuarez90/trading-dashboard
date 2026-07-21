@@ -63,6 +63,18 @@ def test_fresh_breakout_qualifies_bounce_setup_only():
     assert r["price_above_orh"] is True
 
 
+def test_bucket_volume_sums_current_buckets_raw_share_volume():
+    """bucket_volume is the raw share count of the current (last) 5-min bucket —
+    absolute, not relative like rvol. 5 candles of 220,000 shares each sums to
+    1,100,000, comfortably over the ~1M breakout-conviction threshold."""
+    candles = (
+        _bucket(5, 99, 100, 98, 99, 1000)
+        + _bucket(5, 100.5, 103, 100.5, 102, 220000)
+    )
+    r = _compute_indicators_from_candles(candles)
+    assert r["bucket_volume"] == 1100000
+
+
 def test_pullback_after_breakout_qualifies_pullback_setup_only():
     """Broke the ORH on a volume spike, then cooled off below the ORH itself —
     still holding above VWAP/SMA(10)/SMA(20)."""
