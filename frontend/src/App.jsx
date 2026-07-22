@@ -3,6 +3,7 @@ import DailySummaryPanel from './components/DailySummaryPanel'
 import ChatPanel from './components/ChatPanel'
 import ScannerPanel from './components/ScannerPanel'
 import SentimentFeed from './components/SentimentFeed'
+import TopVolumePanel from './components/TopVolumePanel'
 import PortfolioView from './components/PortfolioView'
 import PaperTradingPanel from './components/PaperTradingPanel'
 import LiveTrackingPanel from './components/LiveTrackingPanel'
@@ -29,6 +30,8 @@ export default function App() {
           <ScannerPanel />
           <SentimentFeed />
         </SimpleGrid>
+
+        <TopVolumePanel />
 
         {isPrivate && (
           <>
