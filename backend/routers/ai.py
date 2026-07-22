@@ -1,10 +1,10 @@
 import os
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from models.schemas import TradeSuggestionResponse
-from services import cache_service, claude_service
+from services import cache_service, claude_service, finnhub_service
 from services.context_loader import build_seed_context, load_context
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -51,6 +51,15 @@ def get_sentiment():
         return {"sentiment": cached or []}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Sentiment failed: {e}")
+
+
+@router.get("/earnings")
+def get_earnings(tickers: str = Query(..., description="Comma-separated ticker list")):
+    try:
+        ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+        return {"earnings": finnhub_service.get_batch_quarterly_earnings(ticker_list)}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Earnings failed: {e}")
 
 
 @router.post("/chat")

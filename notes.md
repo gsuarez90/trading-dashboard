@@ -897,3 +897,136 @@ aws cloudwatch put-metric-alarm `
 **When the alarm fires:** run `python scripts/schwab_reauth.py`.
 
 The guardrail checks `trade.reward_risk_ratio >= 1.5` before allowing any paper or live trade to be logged. The ratio is computed by Claude at suggestion time from its proposed entry/target/stop prices.
+
+---
+
+## Short Interest, Short Float & Days to Cover (DTC)
+
+### Definitions
+
+| Term | What it is |
+|------|-----------|
+| **Shares Outstanding** | Total shares the company has issued, including insider/restricted holdings |
+| **Float** | Shares Outstanding minus closely-held/restricted shares — what's actually available for public trading |
+| **Short Interest** | The number of shares *currently sold short and not yet covered* — a snapshot of current bearish positioning, not a property of share structure |
+| **Short % of Float** | `Short Interest / Float` — the standardized comparative bearish-positioning metric |
+| **Days to Cover (DTC)** | `Short Interest / Average Daily Volume` — how many days of normal trading it would take shorts to fully close out |
+
+**Key distinction:** Float and Shares Outstanding are supply-side numbers with no information about short positions. Short interest is a completely separate data point reported by FINRA (exchange-settled twice monthly — mid-month and end-of-month — published ~1-2 weeks later with a lag). You cannot derive short interest, short % of float, or DTC from Float/Shares Outstanding alone.
+
+**Computing DTC when you only have Float, Short % of Float, and Avg Volume:**
+```
+Short Interest = Float × Short % of Float
+DTC = (Float × Short % of Float) / Avg Volume
+```
+Example: Float = 200M, Short % of Float = 3%, Avg Volume = 2M
+→ Short Interest = 200M × 0.03 = 6M shares
+→ DTC = 6M / 2M = 3 days
+
+### Interpreting Short % of Float (the actual bearish-conviction signal)
+
+| Short % of Float | Read |
+|---|---|
+| <5% | Minimal short pressure — rallies driven by real buyers, not covering |
+| 5-15% | Moderate bearish positioning, not unusual |
+| 15-30% | Meaningfully bearish bet; squeeze potential exists if a bullish catalyst appears |
+| >30%, especially with DTC >5-10 | High squeeze risk — the "meme stock" mechanic |
+
+### Interpreting DTC (a liquidity/mechanics signal, NOT a bearish signal)
+
+**Common rule-of-thumb bands:**
+
+| DTC | Read |
+|---|---|
+| <1 day | Shorts can exit almost immediately — no meaningful signal even if SI% is high |
+| 1-3 days | Typical/unremarkable |
+| 3-5 days | Notable — would take sustained buying to force unwinds |
+| 5-10 days | "Squeeze-watch" zone — shorts meaningfully trapped |
+| >10 days | Extreme — frequently flagged as heavily shorted |
+
+**Critical nuance — DTC is NOT itself a bearish signal.** It measures how hard it would be for shorts to exit, not how bearish they are. High DTC means shorts are illiquid relative to volume — if the stock rallies, they can't cover without buying and pushing price up further themselves. So **high DTC + high short interest + a bullish catalyst is often read as bullish (squeeze setup)**, not bearish — the shorts are trapped, which is a vulnerability for the bears.
+
+**Why DTC is relative, not an absolute scale:**
+1. **Liquidity-dependent** — "5 days" on a heavily-traded large cap represents a huge absolute short position; the same 5 days on a thin micro-cap might just reflect low everyday volume, not real conviction.
+2. **Sector norms differ** — clinical-stage biotech and other binary-catalyst names chronically run high SI/DTC as routine hedging; the same number on a stable blue-chip would be a genuine outlier.
+3. **Trend matters more than the level** — a stock moving from 2→8 days DTC across recent settlement periods signals building bearish crowding; that trajectory is more actionable than whether "8" crosses some threshold.
+4. **The volume denominator is noisy/lagged** — ADV is usually a 10- or 30-day trailing average, so a recent volume spike (e.g. a breakout day) can make DTC look artificially low right when it matters most. Different providers (Fintel, Ortex, Yahoo) also use different averaging windows, so cross-provider numbers aren't strictly comparable.
+
+**What's actually driving a DTC change matters:**
+- **Rising short interest, flat volume** → bears getting more aggressive/confident. This part genuinely is bearish.
+- **Falling volume, flat short interest** → the stock just got quieter/less traded — not "more bearish," just "more trapped" if the price reverses.
+
+Same conceptual shape as this project's own RVOL design decision (see guardrail_service / `project_rvol_calibration_examples` memory): informative read against a stock's own baseline and trend, not a fixed magic number to hard-gate on.
+
+### Where to find it
+Not in this app's data pipeline (checked `schwab_service.py` / `finnhub_service.py` — neither pulls short interest/float data). Confirmed sources: **Yahoo Finance's Statistics tab** publishes real FINRA short interest directly. Fintel, Ortex, and MarketBeat also publish it (Fintel/Ortex free tiers cap daily chart views — a chart can appear to "vanish" mid-session and get replaced by a paywall prompt once the cap is hit, which isn't a bug). Robinhood's app shows some of this in a swipeable stats-card carousel on the stock detail page, but appears to substitute a different card (e.g. customer buy volume / institutional-hedge-fund activity) when the short-interest figure for a given ticker is stale or unavailable for the current reporting cycle.
+
+---
+
+## Finding and Stopping Local Dev Servers (PowerShell)
+
+`scripts/start.sh` launches uvicorn (:8000) and Vite (:5173) as background processes. Neither prints a clean way to stop them later, and `pkill -f "uvicorn main:app"` / `pkill -f "vite"` from Git Bash is **not reliable on Windows** — it often only kills the outer wrapper process, not the actual worker holding the port (see gotcha below). PowerShell, working directly against the Windows process/socket tables, is the reliable path.
+
+### 1. Find what's listening on a port
+
+```powershell
+Get-NetTCPConnection -LocalPort 8000,5173 -ErrorAction SilentlyContinue |
+    Select-Object LocalPort, OwningProcess
+```
+
+**Expected output when servers are running** — one row per port, each with a real PID:
+```
+LocalPort OwningProcess
+--------- -------------
+     8000         27752
+     5173         27880
+```
+**Expected output when nothing is running:** no rows at all (blank) — that's normal, not an error.
+
+`OwningProcess` is just a PID number — it tells you nothing about what the process actually is yet.
+
+### 2. Confirm what a PID actually is before touching it
+
+Never kill a PID on the strength of a port number alone. Resolve it first:
+
+```powershell
+Get-Process -Id <PID> | Select-Object Id, ProcessName, Path, StartTime
+```
+
+For full certainty (exact command line + parent process), use CIM instead — process *name* alone can be misleading (e.g. `node.exe` could be Vite, or it could be something completely unrelated like the Playwright MCP server):
+
+```powershell
+Get-CimInstance Win32_Process -Filter "ProcessId=<PID>" |
+    Select-Object ProcessId, ParentProcessId, Name, CommandLine, CreationDate
+```
+
+`CommandLine` will show the real script/module being run (e.g. `...uvicorn.exe main:app --reload --port 8000` vs. `...@playwright/mcp@latest`) — this is the only way to be sure you're not about to kill something unrelated that just happens to share a process name.
+
+To walk the full parent chain (useful to confirm a process traces back to a specific terminal/script run, not something pre-existing):
+```powershell
+$p = Get-CimInstance Win32_Process -Filter "ProcessId=<PID>"
+while ($p) {
+    Write-Host ("{0}  ParentPID={1}  {2}" -f $p.ProcessId, $p.ParentProcessId, $p.Name)
+    $p = Get-CimInstance Win32_Process -Filter "ProcessId=$($p.ParentProcessId)" -ErrorAction SilentlyContinue
+}
+```
+
+### 3. Stop it
+
+```powershell
+Stop-Process -Id <PID> -Force -Confirm:$false
+```
+
+### 4. Verify it's actually gone
+
+Re-run the port check — it should return nothing:
+```powershell
+Get-NetTCPConnection -LocalPort 8000,5173 -ErrorAction SilentlyContinue
+```
+Cross-check from Bash too, since a genuinely dead port shows nothing there either:
+```bash
+curl -s -o /dev/null -w "http_code=%{http_code}\n" --max-time 3 http://127.0.0.1:8000/health
+# http_code=000 means connection refused — port is clear
+```
+
+**Gotcha: `uvicorn --reload` on Windows survives killing the "obvious" PID.** `--reload` spawns two processes: a watcher (the one that prints "Started reloader process [PID]") and a separate multiprocessing *worker* child (prints "Started server process [PID]") that actually binds and serves the socket. Killing only the watcher PID leaves the worker running as an orphan — it keeps answering requests on the port, and `curl`/the browser will show the server as still "up" even though you thought you stopped it. If a port check shows a listener after you've killed what looked like the right PID, check the CommandLine of the current owner — an orphaned worker shows `python.exe -c "from multiprocessing.spawn import spawn_main; spawn_main(parent_pid=<PID-you-killed>, ...)"`. Kill that PID too, then re-verify.

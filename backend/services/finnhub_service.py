@@ -1,6 +1,6 @@
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
@@ -163,4 +163,50 @@ def score_batch_sentiment(tickers: list[str], days: int = 3) -> list[dict]:
                     "top_headlines": [],
                 }
             )
+    return results
+
+
+_MAX_EARNINGS_AGE_DAYS = 730  # ~2 years — Finnhub's history for some tickers has gaps
+# (e.g. T is missing 2025-09-30 entirely) and fills the requested count with whatever
+# else it has on file, including decades-old outliers. Filtering by recency means a
+# gappy ticker shows fewer, real quarters instead of a misleading ancient one.
+
+
+def get_quarterly_earnings(ticker: str, limit: int = 4) -> list[dict]:
+    """Quarterly EPS estimate vs actual for a ticker, most recent quarter first.
+
+    Returns [] when Finnhub has no (recent) earnings history for the symbol —
+    expected for leveraged/index ETFs (TQQQ, SQQQ) and thinly-covered tickers,
+    not an error.
+    """
+    # Pull more than `limit` raw records so there's still enough left to fill
+    # `limit` after the recency filter removes any stale entries.
+    data = _client().company_earnings(ticker.upper(), limit=max(limit * 3, 12))
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=_MAX_EARNINGS_AGE_DAYS)).date().isoformat()
+    recent = [d for d in (data or []) if d.get("period", "") >= cutoff]
+    recent.sort(key=lambda d: d["period"], reverse=True)
+    return [
+        {
+            "period": d["period"],
+            "quarter": d["quarter"],
+            "year": d["year"],
+            "estimate": d["estimate"],
+            "actual": d["actual"],
+            "surprise": d["surprise"],
+            "surprise_percent": d["surprisePercent"],
+        }
+        for d in recent[:limit]
+    ]
+
+
+def get_batch_quarterly_earnings(tickers: list[str], limit: int = 4) -> dict[str, list[dict]]:
+    """Quarterly earnings for each ticker, keyed by ticker. Empty list per-ticker on
+    failure or no coverage — same resilience pattern as score_batch_sentiment."""
+    results = {}
+    for ticker in tickers:
+        try:
+            results[ticker.upper()] = get_quarterly_earnings(ticker, limit=limit)
+        except Exception:
+            logger.exception("finnhub company_earnings failed for %s", ticker)
+            results[ticker.upper()] = []
     return results
